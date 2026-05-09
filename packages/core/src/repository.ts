@@ -144,6 +144,7 @@ export interface ObjectVcsRepository<TState> {
   listRevisions(options?: ListRevisionsOptions): Promise<RevisionSummary[]>;
   tag(name: TagName, options?: TagOptions): Promise<TagRecord>;
   listTags(): Promise<TagRecord[]>;
+  listBranches(): Promise<BranchRecord[]>;
   createBranch(
     name: BranchName,
     options: CreateBranchOptions
@@ -479,6 +480,12 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
 
     async listTags(): Promise<TagRecord[]> {
       return options.persistence.listTags({
+        repoId: options.repoId
+      });
+    },
+
+    async listBranches(): Promise<BranchRecord[]> {
+      return options.persistence.listBranches({
         repoId: options.repoId
       });
     },
