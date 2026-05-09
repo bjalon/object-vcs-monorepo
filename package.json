@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "tsc -b packages/core packages/firebase packages/http packages/react packages/vanilla packages/vue examples/goblin-tavern --noEmit",
+    "typecheck": "tsc -b packages/core packages/firebase packages/http packages/react packages/vanilla packages/vue examples/goblin-tavern",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "dev:example": "npm --workspace @bjalon/object-vcs-example-goblin-tavern run dev",

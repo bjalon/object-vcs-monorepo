@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
-    "typecheck": "tsc -b tsconfig.json --noEmit",
+    "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run",
     "lint": "eslint \"src/**/*.ts\""
   },
