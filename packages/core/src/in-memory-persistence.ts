@@ -2,6 +2,8 @@ import {
   BranchAlreadyExistsError,
   BranchNotFoundError,
   ConcurrencyConflictError,
+  DirtyHeadError,
+  PersistenceError,
   RepositoryAlreadyExistsError,
   RepositoryNotFoundError,
   RevisionNotFoundError,
@@ -421,13 +423,64 @@ export function inMemoryPersistence<TState>(
         throw new TagAlreadyExistsError(`Tag "${input.name}" already exists.`);
       }
 
-      const revision =
+      const branchName = input.branchName ?? store.repo.defaultBranch;
+      let revision =
         input.revision === undefined || input.revision === "HEAD"
-          ? getHeadOrThrow(
-              store,
-              input.branchName ?? store.repo.defaultBranch
-            ).headRevision
+          ? getHeadOrThrow(store, branchName).headRevision
           : input.revision;
+
+      if (input.revision === undefined || input.revision === "HEAD") {
+        const head = getHeadOrThrow(store, branchName);
+        if (head.status === "dirty") {
+          if (input.createRevisionIfDirty === false) {
+            throw new DirtyHeadError(
+              "Cannot tag a dirty HEAD when createRevisionIfDirty is false."
+            );
+          }
+
+          const revisionNumber = store.repo.nextRevision;
+          const timestamp = now();
+          const parentRevision = head.baseRevision;
+          const parentHash =
+            parentRevision === null
+              ? null
+              : getRevisionOrThrow(store, parentRevision).revision.stateHash;
+          const revisionRecord: RevisionRecord = {
+            repoId: input.repoId,
+            revision: revisionNumber,
+            parentRevision,
+            branchName,
+            stateHash: head.stateHash,
+            schemaVersion: store.repo.schemaVersion,
+            graphVersion: store.repo.graphVersion,
+            message: `Create revision for tag ${input.name}`,
+            createdAt: timestamp,
+            ...(input.author === undefined ? {} : { createdBy: input.author }),
+            isEmptyRevision: parentHash === head.stateHash,
+            isCheckpoint: true,
+            snapshotRef: head.stateHash
+          };
+
+          store.revisions.set(revisionNumber, {
+            revision: revisionRecord,
+            state: cloneJson(head.state)
+          });
+          store.repo = {
+            ...store.repo,
+            nextRevision: revisionNumber + 1,
+            updatedAt: timestamp
+          };
+          setCleanHead(
+            store,
+            branchName,
+            head.state,
+            head.stateHash,
+            revisionNumber,
+            input.author
+          );
+          revision = revisionNumber;
+        }
+      }
 
       if (revision === null) {
         throw new RevisionNotFoundError("Cannot tag a dirty HEAD directly.");
@@ -555,6 +608,10 @@ export function inMemoryPersistence<TState>(
     },
 
     async resetBranch(input: ResetBranchInput): Promise<BranchRecord> {
+      if (input.mode !== "hard") {
+        throw new PersistenceError('resetBranch only supports mode "hard".');
+      }
+
       const store = getStore(input.repoId);
       const currentHead = getHeadOrThrow(store, input.branchName);
       checkExpectedHeadHash(currentHead, input.expectedHeadHash);
@@ -568,6 +625,35 @@ export function inMemoryPersistence<TState>(
         input.author
       );
       return cloneJson(getBranchOrThrow(store, input.branchName));
+    },
+
+    subscribeHead(input, callback) {
+      const store = getStore(input.repoId);
+      callback(cloneJson(getHeadOrThrow(store, input.branchName)));
+      return () => {
+        return;
+      };
+    },
+
+    subscribeRevisions(input, callback) {
+      void this.listRevisions(input).then(callback);
+      return () => {
+        return;
+      };
+    },
+
+    subscribeTags(input, callback) {
+      void this.listTags(input).then(callback);
+      return () => {
+        return;
+      };
+    },
+
+    subscribeBranches(input, callback) {
+      void this.listBranches(input).then(callback);
+      return () => {
+        return;
+      };
     }
   };
 }

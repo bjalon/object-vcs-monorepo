@@ -14,6 +14,7 @@ import {
   BranchAlreadyExistsError,
   BranchNotFoundError,
   ConcurrencyConflictError,
+  DirtyHeadError,
   PersistenceError,
   RepositoryAlreadyExistsError,
   RepositoryNotFoundError,
@@ -542,30 +543,100 @@ export function firebasePersistence<TState>(
           throw new TagAlreadyExistsError(`Tag "${input.name}" already exists.`);
         }
 
-        const revision =
+        const branchName = input.branchName ?? repo.defaultBranch;
+        let revision: RevisionNumber | null =
           input.revision === undefined || input.revision === "HEAD"
-            ? (
-                await headFromSnapshotOrThrowInTransaction<TState>(
-                  transaction,
-                  refs,
-                  input.repoId,
-                  input.branchName ?? repo.defaultBranch,
-                  await transaction.get(
-                    refs.head(input.repoId, input.branchName ?? repo.defaultBranch)
-                  )
-                )
-              ).headRevision
+            ? null
             : input.revision;
+        let revisionToWrite: RevisionRecord | null = null;
+        let revisionStateToWrite: TState | null = null;
+        let branchToWrite: BranchRecord | null = null;
+        let headToWrite: Head<TState> | null = null;
+
+        if (input.revision === undefined || input.revision === "HEAD") {
+          const head = await headFromSnapshotOrThrowInTransaction<TState>(
+            transaction,
+            refs,
+            input.repoId,
+            branchName,
+            await transaction.get(refs.head(input.repoId, branchName))
+          );
+          checkExpectedHeadHash(head, input.expectedHeadHash);
+
+          if (head.status === "dirty") {
+            if (input.createRevisionIfDirty === false) {
+              throw new DirtyHeadError(
+                "Cannot tag a dirty HEAD when createRevisionIfDirty is false."
+              );
+            }
+
+            const branchSnapshot = await transaction.get(
+              refs.branch(input.repoId, branchName)
+            );
+            const branch = branchFromSnapshotOrThrow(branchName, branchSnapshot);
+            const revisionNumber = repo.nextRevision;
+            const timestamp = resolvedOptions.now();
+            const parentRevision = head.baseRevision;
+            const parentHash =
+              parentRevision === null
+                ? null
+                : revisionFromSnapshotOrThrow(
+                    parentRevision,
+                    await transaction.get(
+                      refs.revision(input.repoId, parentRevision)
+                    ),
+                    input.repoId
+                  ).stateHash;
+
+            revisionToWrite = createRevisionRecord({
+              repo,
+              revision: revisionNumber,
+              branchName,
+              parentRevision,
+              stateHash: head.stateHash,
+              isEmptyRevision: parentHash === head.stateHash,
+              timestamp,
+              message: `Create revision for tag ${input.name}`,
+              author: input.author
+            });
+            revisionStateToWrite = head.state;
+            headToWrite = createHeadRecord({
+              repoId: input.repoId,
+              branchName,
+              status: "clean",
+              revision: revisionNumber,
+              baseRevision: revisionNumber,
+              stateHash: head.stateHash,
+              state: head.state,
+              timestamp,
+              author: input.author
+            });
+            branchToWrite = updateBranchRecord({
+              previous: branch,
+              revision: revisionNumber,
+              baseRevision: revisionNumber,
+              stateHash: head.stateHash,
+              status: "clean",
+              timestamp,
+              author: input.author
+            });
+            revision = revisionNumber;
+          } else {
+            revision = head.headRevision;
+          }
+        }
 
         if (revision === null) {
           throw new RevisionNotFoundError("Cannot tag a dirty HEAD directly.");
         }
 
-        revisionFromSnapshotOrThrow(
-          revision,
-          await transaction.get(refs.revision(input.repoId, revision)),
-          input.repoId
-        );
+        if (revisionToWrite === null) {
+          revisionFromSnapshotOrThrow(
+            revision,
+            await transaction.get(refs.revision(input.repoId, revision)),
+            input.repoId
+          );
+        }
 
         const tag: TagRecord = {
           repoId: input.repoId,
@@ -577,6 +648,34 @@ export function firebasePersistence<TState>(
           createdAt: resolvedOptions.now(),
           ...(input.author === undefined ? {} : { createdBy: input.author })
         };
+
+        if (
+          revisionToWrite !== null &&
+          revisionStateToWrite !== null &&
+          branchToWrite !== null &&
+          headToWrite !== null
+        ) {
+          transaction.update(refs.repo(input.repoId), {
+            nextRevision: revisionToWrite.revision + 1,
+            updatedAt: revisionToWrite.createdAt
+          });
+          transaction.set(refs.branch(input.repoId, branchName), branchToWrite);
+          writeHeadDocument(
+            transaction,
+            refs,
+            resolvedOptions,
+            input.repoId,
+            headToWrite
+          );
+          writeSnapshotRevision(
+            transaction,
+            refs,
+            input.repoId,
+            revisionToWrite,
+            revisionStateToWrite,
+            revisionToWrite.createdAt
+          );
+        }
 
         transaction.set(tagReference, tag);
         return tag;
@@ -729,6 +828,10 @@ export function firebasePersistence<TState>(
     },
 
     async resetBranch(input: ResetBranchInput): Promise<BranchRecord> {
+      if (input.mode !== "hard") {
+        throw new PersistenceError('resetBranch only supports mode "hard".');
+      }
+
       return runTransaction(resolvedOptions.db, async transaction => {
         await readRepoOrThrowInTransaction(transaction, refs, input.repoId);
         const branchSnapshot = await transaction.get(
@@ -831,6 +934,26 @@ export function firebasePersistence<TState>(
           .slice(0, input.limit);
 
         callback(revisions);
+      });
+    },
+
+    subscribeTags(input, callback): Unsubscribe {
+      return onSnapshot(refs.tags(input.repoId), snapshot => {
+        const tags = snapshot.docs
+          .map(item => tagRecordFromDocument(readDocumentData(item)))
+          .sort((left, right) => left.name.localeCompare(right.name));
+
+        callback(tags);
+      });
+    },
+
+    subscribeBranches(input, callback): Unsubscribe {
+      return onSnapshot(refs.branches(input.repoId), snapshot => {
+        const branches = snapshot.docs
+          .map(item => branchRecordFromDocument(readDocumentData(item)))
+          .sort((left, right) => left.name.localeCompare(right.name));
+
+        callback(branches);
       });
     }
   };
@@ -1189,8 +1312,19 @@ function createRevisionRecord(input: {
     ...(input.author === undefined ? {} : { createdBy: input.author }),
     isEmptyRevision: input.isEmptyRevision,
     isCheckpoint: true,
-    snapshotRef: input.stateHash
+    snapshotRef: createRevisionBlobRef(input.stateHash, input.revision)
   };
+}
+
+function createRevisionBlobRef(
+  stateHash: StateHash,
+  revision: RevisionNumber
+): string {
+  return `${stateHash}:revision:${revision}`;
+}
+
+function createHeadBlobRef<TState>(head: Head<TState>): string {
+  return `${head.stateHash}:head:${head.branchName}:${head.updatedAt}`;
 }
 
 function writeHeadDocument<TState>(
@@ -1201,19 +1335,20 @@ function writeHeadDocument<TState>(
   head: Head<TState>
 ): void {
   const inlineState = jsonByteSize(head.state) <= options.maxInlineHeadStateBytes;
+  const stateBlobRef = createHeadBlobRef(head);
   const document: FirebaseHeadDocument<TState> = {
     branchName: head.branchName,
     status: head.status,
     headRevision: head.headRevision,
     baseRevision: head.baseRevision,
     stateHash: head.stateHash,
-    ...(inlineState ? { state: head.state } : { stateBlobRef: head.stateHash }),
+    ...(inlineState ? { state: head.state } : { stateBlobRef }),
     updatedAt: head.updatedAt,
     ...(head.updatedBy === undefined ? {} : { updatedBy: head.updatedBy })
   };
 
   if (!inlineState) {
-    writeBlob(transaction, refs, repoId, head.stateHash, head.state, head.updatedAt);
+    writeBlob(transaction, refs, repoId, stateBlobRef, head.stateHash, head.state, head.updatedAt);
   }
 
   transaction.set(refs.head(repoId, head.branchName), document);
@@ -1234,7 +1369,7 @@ function writeSnapshotRevision<TState>(
     stateHash: revision.stateHash,
     schemaVersion: revision.schemaVersion,
     graphVersion: revision.graphVersion,
-    snapshotBlobRef: revision.stateHash,
+    snapshotBlobRef: requireString(revision.snapshotRef, "snapshotRef"),
     isCheckpoint: revision.isCheckpoint,
     isEmptyRevision: revision.isEmptyRevision,
     ...(revision.message === undefined ? {} : { message: revision.message }),
@@ -1244,7 +1379,15 @@ function writeSnapshotRevision<TState>(
       : { createdBy: revision.createdBy })
   };
 
-  writeBlob(transaction, refs, repoId, revision.stateHash, state, timestamp);
+  writeBlob(
+    transaction,
+    refs,
+    repoId,
+    requireString(revision.snapshotRef, "snapshotRef"),
+    revision.stateHash,
+    state,
+    timestamp
+  );
   transaction.set(refs.revision(repoId, revision.revision), document);
 }
 
@@ -1252,6 +1395,7 @@ function writeBlob<TState>(
   transaction: TransactionLike,
   refs: ReferenceFactory,
   repoId: string,
+  blobRef: string,
   stateHash: StateHash,
   state: TState,
   timestamp: string
@@ -1262,7 +1406,7 @@ function writeBlob<TState>(
     state,
     createdAt: timestamp
   };
-  transaction.set(refs.blob(repoId, stateHash), document);
+  transaction.set(refs.blob(repoId, blobRef), document);
 }
 
 async function readRevisionSnapshotState<TState>(

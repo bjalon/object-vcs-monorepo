@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -54,6 +55,15 @@ export interface UseRevisionsResult extends AsyncHookResult {
   readonly revisions: readonly RevisionSummary[];
 }
 
+export interface UseRevisionOptions {
+  readonly revision?: RevisionNumber | null;
+  readonly enabled?: boolean;
+}
+
+export interface UseRevisionResult<TState> extends AsyncHookResult {
+  readonly state: TState | null;
+}
+
 export interface UseTagsOptions {
   readonly enabled?: boolean;
 }
@@ -78,6 +88,14 @@ export interface UseCommitResult<TState> {
   readonly reset: () => void;
 }
 
+export interface UseCheckoutResult<TState> {
+  readonly checkout: (branch: BranchName) => Promise<Head<TState>>;
+  readonly loading: boolean;
+  readonly error: unknown;
+  readonly head: Head<TState> | null;
+  readonly reset: () => void;
+}
+
 export interface RevisionTimelineProps<TState = unknown> {
   readonly branch?: BranchName;
   readonly revisions?: readonly RevisionSummary[];
@@ -94,9 +112,61 @@ export interface RevisionTimelineProps<TState = unknown> {
   ) => void | Promise<void>;
 }
 
+export interface RevisionPickerProps {
+  readonly revisions: readonly RevisionSummary[];
+  readonly selectedRevision?: RevisionNumber | null;
+  readonly onSelectRevision?: (
+    revision: RevisionSummary
+  ) => void | Promise<void>;
+}
+
+export interface BranchSelectorProps {
+  readonly branches: readonly BranchRecord[];
+  readonly selectedBranch?: BranchName;
+  readonly onCheckout?: (branch: BranchName) => void | Promise<void>;
+}
+
+export interface TagListProps {
+  readonly tags: readonly TagRecord[];
+}
+
+export interface DiffViewerProps {
+  readonly before?: unknown;
+  readonly after?: unknown;
+}
+
+interface AsyncGuard {
+  next(): number;
+  isCurrent(requestId: number): boolean;
+}
+
 const ObjectVcsContext = createContext<ObjectVcsRepository<unknown> | null>(
   null
 );
+
+function useAsyncGuard(): AsyncGuard {
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  return useMemo(
+    () => ({
+      next() {
+        requestIdRef.current += 1;
+        return requestIdRef.current;
+      },
+      isCurrent(requestId: number) {
+        return mountedRef.current && requestIdRef.current === requestId;
+      }
+    }),
+    []
+  );
+}
 
 export function ObjectVcsProvider<TState>(
   props: ObjectVcsProviderProps<TState>
@@ -129,23 +199,32 @@ export function useHead<TState = unknown>(
   const [head, setHead] = useState<Head<TState> | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<unknown>(undefined);
+  const guard = useAsyncGuard();
 
   const reload = useCallback(async () => {
     if (!enabled) {
       return;
     }
 
+    const requestId = guard.next();
     setLoading(true);
     setError(undefined);
 
     try {
-      setHead(await repository.getHead(toGetHeadOptions(branch)));
+      const nextHead = await repository.getHead(toGetHeadOptions(branch));
+      if (guard.isCurrent(requestId)) {
+        setHead(nextHead);
+      }
     } catch (caughtError: unknown) {
-      setError(caughtError);
+      if (guard.isCurrent(requestId)) {
+        setError(caughtError);
+      }
     } finally {
-      setLoading(false);
+      if (guard.isCurrent(requestId)) {
+        setLoading(false);
+      }
     }
-  }, [branch, enabled, repository]);
+  }, [branch, enabled, guard, repository]);
 
   useEffect(() => {
     void reload();
@@ -172,27 +251,34 @@ export function useRevisions(
   const [revisions, setRevisions] = useState<readonly RevisionSummary[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<unknown>(undefined);
+  const guard = useAsyncGuard();
 
   const reload = useCallback(async () => {
     if (!enabled) {
       return;
     }
 
+    const requestId = guard.next();
     setLoading(true);
     setError(undefined);
 
     try {
-      setRevisions(
-        await repository.listRevisions(
-          toListRevisionsOptions(branch, limit, after, order)
-        )
+      const nextRevisions = await repository.listRevisions(
+        toListRevisionsOptions(branch, limit, after, order)
       );
+      if (guard.isCurrent(requestId)) {
+        setRevisions(nextRevisions);
+      }
     } catch (caughtError: unknown) {
-      setError(caughtError);
+      if (guard.isCurrent(requestId)) {
+        setError(caughtError);
+      }
     } finally {
-      setLoading(false);
+      if (guard.isCurrent(requestId)) {
+        setLoading(false);
+      }
     }
-  }, [after, branch, enabled, limit, order, repository]);
+  }, [after, branch, enabled, guard, limit, order, repository]);
 
   useEffect(() => {
     void reload();
@@ -206,29 +292,86 @@ export function useRevisions(
   };
 }
 
+export function useRevision<TState = unknown>(
+  options: UseRevisionOptions
+): UseRevisionResult<TState> {
+  const repository = useObjectVcs<TState>();
+  const enabled = options.enabled ?? true;
+  const revision = options.revision;
+  const [state, setState] = useState<TState | null>(null);
+  const [loading, setLoading] = useState(enabled && revision != null);
+  const [error, setError] = useState<unknown>(undefined);
+  const guard = useAsyncGuard();
+
+  const reload = useCallback(async () => {
+    if (!enabled || revision === undefined || revision === null) {
+      return;
+    }
+
+    const requestId = guard.next();
+    setLoading(true);
+    setError(undefined);
+
+    try {
+      const nextState = await repository.readRevision(revision);
+      if (guard.isCurrent(requestId)) {
+        setState(nextState);
+      }
+    } catch (caughtError: unknown) {
+      if (guard.isCurrent(requestId)) {
+        setError(caughtError);
+      }
+    } finally {
+      if (guard.isCurrent(requestId)) {
+        setLoading(false);
+      }
+    }
+  }, [enabled, guard, repository, revision]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  return {
+    state,
+    loading,
+    error,
+    reload
+  };
+}
+
 export function useTags(options: UseTagsOptions = {}): UseTagsResult {
   const repository = useObjectVcs<unknown>();
   const enabled = options.enabled ?? true;
   const [tags, setTags] = useState<readonly TagRecord[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<unknown>(undefined);
+  const guard = useAsyncGuard();
 
   const reload = useCallback(async () => {
     if (!enabled) {
       return;
     }
 
+    const requestId = guard.next();
     setLoading(true);
     setError(undefined);
 
     try {
-      setTags(await repository.listTags());
+      const nextTags = await repository.listTags();
+      if (guard.isCurrent(requestId)) {
+        setTags(nextTags);
+      }
     } catch (caughtError: unknown) {
-      setError(caughtError);
+      if (guard.isCurrent(requestId)) {
+        setError(caughtError);
+      }
     } finally {
-      setLoading(false);
+      if (guard.isCurrent(requestId)) {
+        setLoading(false);
+      }
     }
-  }, [enabled, repository]);
+  }, [enabled, guard, repository]);
 
   useEffect(() => {
     void reload();
@@ -250,23 +393,32 @@ export function useBranches(
   const [branches, setBranches] = useState<readonly BranchRecord[]>([]);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<unknown>(undefined);
+  const guard = useAsyncGuard();
 
   const reload = useCallback(async () => {
     if (!enabled) {
       return;
     }
 
+    const requestId = guard.next();
     setLoading(true);
     setError(undefined);
 
     try {
-      setBranches(await repository.listBranches());
+      const nextBranches = await repository.listBranches();
+      if (guard.isCurrent(requestId)) {
+        setBranches(nextBranches);
+      }
     } catch (caughtError: unknown) {
-      setError(caughtError);
+      if (guard.isCurrent(requestId)) {
+        setError(caughtError);
+      }
     } finally {
-      setLoading(false);
+      if (guard.isCurrent(requestId)) {
+        setLoading(false);
+      }
     }
-  }, [enabled, repository]);
+  }, [enabled, guard, repository]);
 
   useEffect(() => {
     void reload();
@@ -315,6 +467,45 @@ export function useCommit<TState = unknown>(): UseCommitResult<TState> {
     loading,
     error,
     result,
+    reset
+  };
+}
+
+export function useCheckout<TState = unknown>(): UseCheckoutResult<TState> {
+  const repository = useObjectVcs<TState>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<unknown>(undefined);
+  const [head, setHead] = useState<Head<TState> | null>(null);
+
+  const checkout = useCallback(
+    async (branch: BranchName) => {
+      setLoading(true);
+      setError(undefined);
+
+      try {
+        const nextHead = await repository.checkout(branch);
+        setHead(nextHead);
+        return nextHead;
+      } catch (caughtError: unknown) {
+        setError(caughtError);
+        throw caughtError;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [repository]
+  );
+
+  const reset = useCallback(() => {
+    setError(undefined);
+    setHead(null);
+  }, []);
+
+  return {
+    checkout,
+    loading,
+    error,
+    head,
     reset
   };
 }
@@ -386,6 +577,86 @@ export function RevisionTimeline<TState = unknown>(
             })
           )
         )
+  );
+}
+
+export function RevisionPicker(props: RevisionPickerProps): ReactElement {
+  return createElement(
+    "div",
+    { style: timelineStyles.tags },
+    props.revisions.map(revision =>
+      createElement(
+        "button",
+        {
+          key: revision.revision,
+          type: "button",
+          style:
+            props.selectedRevision === revision.revision
+              ? timelineStyles.selectedButton
+              : timelineStyles.revisionButton,
+          onClick: () => {
+            void props.onSelectRevision?.(revision);
+          }
+        },
+        `#${revision.revision}`
+      )
+    )
+  );
+}
+
+export function BranchSelector(props: BranchSelectorProps): ReactElement {
+  return createElement(
+    "div",
+    { style: timelineStyles.tags },
+    props.branches.map(branch =>
+      createElement(
+        "button",
+        {
+          key: branch.name,
+          type: "button",
+          style:
+            props.selectedBranch === branch.name
+              ? timelineStyles.selectedButton
+              : timelineStyles.revisionButton,
+          onClick: () => {
+            void props.onCheckout?.(branch.name);
+          }
+        },
+        branch.name
+      )
+    )
+  );
+}
+
+export function TagList(props: TagListProps): ReactElement {
+  return createElement(
+    "div",
+    { style: timelineStyles.tags },
+    props.tags.map(tag =>
+      createElement(
+        "span",
+        {
+          key: tag.name,
+          style: timelineStyles.tag
+        },
+        `${tag.name} -> #${tag.revision}`
+      )
+    )
+  );
+}
+
+export function DiffViewer(props: DiffViewerProps): ReactElement {
+  return createElement(
+    "pre",
+    { style: timelineStyles.diff },
+    JSON.stringify(
+      {
+        before: props.before ?? null,
+        after: props.after ?? null
+      },
+      null,
+      2
+    )
   );
 }
 
@@ -589,6 +860,15 @@ const timelineStyles = {
     cursor: "pointer",
     font: "inherit"
   },
+  selectedButton: {
+    border: "1px solid #2563eb",
+    borderRadius: 6,
+    background: "#eff6ff",
+    color: "#1d4ed8",
+    padding: "4px 8px",
+    cursor: "pointer",
+    font: "inherit"
+  },
   restoreButton: {
     justifySelf: "start",
     border: "1px solid #9ca3af",
@@ -637,5 +917,13 @@ const timelineStyles = {
     border: "1px solid #fecaca",
     borderRadius: 8,
     padding: 8
+  },
+  diff: {
+    overflow: "auto",
+    border: "1px solid #d1d5db",
+    borderRadius: 8,
+    padding: 8,
+    background: "#f9fafb",
+    fontSize: 12
   }
 } satisfies Record<string, CSSProperties>;

@@ -187,7 +187,7 @@ describe("Object VCS repository with in-memory persistence", () => {
     await expect(repo.listTags()).resolves.toEqual([tag]);
   });
 
-  it("tags dirty HEAD only when createRevisionIfDirty is true", async () => {
+  it("tags dirty HEAD by creating a revision unless explicitly disabled", async () => {
     const repo = createCounterRepository("tag-dirty");
     await repo.init({ initialState: initialState() });
     await repo.update(() => ({
@@ -197,9 +197,11 @@ describe("Object VCS repository with in-memory persistence", () => {
       }
     }));
 
-    await expect(repo.tag("dirty")).rejects.toBeInstanceOf(DirtyHeadError);
+    await expect(
+      repo.tag("blocked", { createRevisionIfDirty: false })
+    ).rejects.toBeInstanceOf(DirtyHeadError);
 
-    const tag = await repo.tag("dirty", { createRevisionIfDirty: true });
+    const tag = await repo.tag("dirty");
 
     expect(tag.revision).toBe(2);
     expect((await repo.getHead()).status).toBe("clean");

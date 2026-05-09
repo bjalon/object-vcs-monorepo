@@ -180,6 +180,8 @@ export interface SubscribeHeadInput {
 }
 
 export type SubscribeRevisionsInput = ListRevisionsInput;
+export type SubscribeTagsInput = ListTagsInput;
+export type SubscribeBranchesInput = ListBranchesInput;
 
 export interface PersistenceAdapter<TState> {
   getRepo(input: GetRepoInput): Promise<RepoRecord | null>;
@@ -211,5 +213,13 @@ export interface PersistenceAdapter<TState> {
   subscribeRevisions?(
     input: SubscribeRevisionsInput,
     callback: (items: RevisionSummary[]) => void
+  ): Unsubscribe;
+  subscribeTags?(
+    input: SubscribeTagsInput,
+    callback: (items: TagRecord[]) => void
+  ): Unsubscribe;
+  subscribeBranches?(
+    input: SubscribeBranchesInput,
+    callback: (items: BranchRecord[]) => void
   ): Unsubscribe;
 }

@@ -1,5 +1,6 @@
 import type {
   BranchName,
+  BranchRecord,
   Head,
   ObjectVcsRepository,
   RestoreOptions,
@@ -29,6 +30,21 @@ export interface RevisionTimelineOptions<TState = unknown> {
 export interface RevisionTimelineController<TState = unknown> {
   refresh(): Promise<void>;
   update(options: Partial<RevisionTimelineOptions<TState>>): void;
+  destroy(): void;
+}
+
+export interface BranchSelectorOptions {
+  readonly branches: readonly BranchRecord[];
+  readonly selectedBranch?: BranchName;
+  readonly onCheckout?: (branch: BranchName) => void | Promise<void>;
+}
+
+export interface TagListOptions {
+  readonly tags: readonly TagRecord[];
+}
+
+export interface DomController<TOptions> {
+  update(options: Partial<TOptions>): void;
   destroy(): void;
 }
 
@@ -181,6 +197,56 @@ export function defineObjectVcsWebComponents(): void {
   );
 }
 
+export function createBranchSelector(
+  element: Element,
+  options: BranchSelectorOptions
+): DomController<BranchSelectorOptions> {
+  const state: BranchSelectorOptions = { ...options };
+  const handleClick = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const button = target.closest<HTMLButtonElement>("[data-branch]");
+    if (button?.dataset.branch !== undefined) {
+      void state.onCheckout?.(button.dataset.branch);
+    }
+  };
+
+  element.addEventListener("click", handleClick);
+  renderBranchSelector(element, state);
+
+  return {
+    update(nextOptions) {
+      Object.assign(state, nextOptions);
+      renderBranchSelector(element, state);
+    },
+    destroy() {
+      element.removeEventListener("click", handleClick);
+      element.innerHTML = "";
+    }
+  };
+}
+
+export function createTagList(
+  element: Element,
+  options: TagListOptions
+): DomController<TagListOptions> {
+  const state: TagListOptions = { ...options };
+  renderTagList(element, state);
+
+  return {
+    update(nextOptions) {
+      Object.assign(state, nextOptions);
+      renderTagList(element, state);
+    },
+    destroy() {
+      element.innerHTML = "";
+    }
+  };
+}
+
 export function renderRevisionTimeline<TState>(
   element: Element,
   state: Pick<
@@ -228,6 +294,31 @@ export function createRevisionTimelineMarkup<TState>(
   }
   ${rows}
 </section>`;
+}
+
+export function renderBranchSelector(
+  element: Element,
+  state: BranchSelectorOptions
+): void {
+  element.innerHTML = `<div class="object-vcs-branch-selector">${state.branches
+    .map(
+      branch =>
+        `<button type="button" data-branch="${escapeHtml(branch.name)}" class="${
+          state.selectedBranch === branch.name ? "selected" : ""
+        }">${escapeHtml(branch.name)}</button>`
+    )
+    .join("")}</div>`;
+}
+
+export function renderTagList(element: Element, state: TagListOptions): void {
+  element.innerHTML = `<div class="object-vcs-tag-list">${state.tags
+    .map(
+      tag =>
+        `<span class="object-vcs-tag">${escapeHtml(tag.name)} -&gt; #${
+          tag.revision
+        }</span>`
+    )
+    .join("")}</div>`;
 }
 
 export const objectVcsVanillaPackage = "@bjalon/object-vcs-vanilla";

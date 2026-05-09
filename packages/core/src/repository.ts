@@ -3,7 +3,9 @@ import {
   DirtyHeadError,
   EntityAlreadyExistsError,
   EntityNotFoundError,
-  RevisionNotFoundError
+  PersistenceError,
+  RevisionNotFoundError,
+  ValidationError
 } from "./errors.js";
 import type {
   CollectionGraphEntry,
@@ -27,7 +29,8 @@ import type {
 } from "./types.js";
 import type {
   PersistenceAdapter,
-  RevisionSummary
+  RevisionSummary,
+  Unsubscribe
 } from "./persistence.js";
 
 export interface CreateRepositoryOptions<TGraph extends ObjectVcsGraph> {
@@ -116,6 +119,7 @@ export interface RestoreOptions {
   readonly commit?: boolean;
   readonly message?: string;
   readonly author?: string;
+  readonly expectedHeadHash?: StateHash;
 }
 
 export interface ResetBranchOptions {
@@ -128,6 +132,10 @@ export interface ResetBranchOptions {
 export interface ObjectVcsRepository<TState> {
   init(options: InitOptions<TState>): Promise<InitResult<TState>>;
   getHead(options?: GetHeadOptions): Promise<Head<TState>>;
+  watchHead(
+    callback: (head: Head<TState>) => void,
+    options?: GetHeadOptions
+  ): Unsubscribe;
   update(
     updater: (current: TState) => TState,
     options?: UpdateOptions
@@ -142,6 +150,10 @@ export interface ObjectVcsRepository<TState> {
     options?: ReadRevisionOptions
   ): Promise<TState>;
   listRevisions(options?: ListRevisionsOptions): Promise<RevisionSummary[]>;
+  watchRevisions(
+    callback: (revisions: RevisionSummary[]) => void,
+    options?: ListRevisionsOptions
+  ): Unsubscribe;
   tag(name: TagName, options?: TagOptions): Promise<TagRecord>;
   listTags(): Promise<TagRecord[]>;
   listBranches(): Promise<BranchRecord[]>;
@@ -246,6 +258,53 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     return options.graph.validateState(input) as TState;
   }
 
+  async function validateHead(head: Head<TState>): Promise<Head<TState>> {
+    const state = validateState(head.state);
+    const stateHash = await hashState(state);
+
+    if (stateHash !== head.stateHash) {
+      throw new ValidationError("HEAD state hash does not match its state.", [
+        {
+          path: ["stateHash"],
+          message: `Expected "${head.stateHash}", computed "${stateHash}".`
+        }
+      ]);
+    }
+
+    if (head.status === "clean" && head.headRevision === null) {
+      throw new ValidationError("Clean HEAD must point to a revision.", [
+        {
+          path: ["headRevision"],
+          message: "Clean HEAD must have a headRevision."
+        }
+      ]);
+    }
+
+    return {
+      ...head,
+      state
+    };
+  }
+
+  async function validateStoredRevision(
+    revision: RevisionSummary,
+    stateInput: unknown
+  ): Promise<TState> {
+    const state = validateState(stateInput);
+    const stateHash = await hashState(state);
+
+    if (stateHash !== revision.stateHash) {
+      throw new ValidationError("Revision state hash does not match its state.", [
+        {
+          path: ["stateHash"],
+          message: `Expected "${revision.stateHash}", computed "${stateHash}".`
+        }
+      ]);
+    }
+
+    return state;
+  }
+
   async function writeUpdate(
     nextStateInput: unknown,
     updateOptions: UpdateOptions = {}
@@ -299,6 +358,23 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     };
   }
 
+  function withDefaultExpectedHeadHash<TOptions extends UpdateOptions>(
+    updateOptions: TOptions,
+    head: Head<TState>
+  ): TOptions {
+    if (
+      updateOptions.expectedHeadHash !== undefined ||
+      updateOptions.concurrency === "last-write-wins"
+    ) {
+      return updateOptions;
+    }
+
+    return {
+      ...updateOptions,
+      expectedHeadHash: head.stateHash
+    };
+  }
+
   const repository: ObjectVcsRepository<TState> = {
     async init(initOptions: InitOptions<TState>): Promise<InitResult<TState>> {
       activeBranch = initOptions.branch ?? defaultBranch;
@@ -340,7 +416,27 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         );
       }
 
-      return head;
+      return validateHead(head);
+    },
+
+    watchHead(
+      callback: (head: Head<TState>) => void,
+      watchOptions: GetHeadOptions = {}
+    ): Unsubscribe {
+      if (options.persistence.subscribeHead === undefined) {
+        throw new PersistenceError("Persistence adapter does not support watchHead.");
+      }
+
+      const branchName = resolveBranch(watchOptions.branch);
+      return options.persistence.subscribeHead(
+        {
+          repoId: options.repoId,
+          branchName
+        },
+        head => {
+          void validateHead(head).then(callback);
+        }
+      );
     },
 
     async update(
@@ -352,7 +448,10 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
           ? {}
           : { branch: updateOptions.branch }
       );
-      return writeUpdate(updater(cloneJson(current.state)), updateOptions);
+      return writeUpdate(
+        updater(cloneJson(current.state)),
+        withDefaultExpectedHeadHash(updateOptions, current)
+      );
     },
 
     async edit(
@@ -366,7 +465,10 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       );
       const draft = cloneJson(current.state);
       recipe(draft);
-      return writeUpdate(draft, updateOptions);
+      return writeUpdate(
+        draft,
+        withDefaultExpectedHeadHash(updateOptions, current)
+      );
     },
 
     async commit(
@@ -388,9 +490,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         ...(commitOptions.allowEmpty === undefined
           ? {}
           : { allowEmpty: commitOptions.allowEmpty }),
-        ...(commitOptions.expectedHeadHash === undefined
-          ? {}
-          : { expectedHeadHash: commitOptions.expectedHeadHash })
+        expectedHeadHash: commitOptions.expectedHeadHash ?? head.stateHash
       });
 
       return {
@@ -405,16 +505,21 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       readRevisionOptions: ReadRevisionOptions = {}
     ): Promise<TState> {
       void readRevisionOptions;
-      const state = await options.persistence.readRevisionState({
+      const storedRevision = await options.persistence.readRevision({
         repoId: options.repoId,
         revision
       });
 
-      if (state === null) {
+      if (storedRevision === null) {
         throw new RevisionNotFoundError(`Revision "${revision}" was not found.`);
       }
 
-      return cloneJson(state);
+      return cloneJson(
+        await validateStoredRevision(
+          storedRevision.revision,
+          storedRevision.state
+        )
+      );
     },
 
     async listRevisions(
@@ -431,6 +536,32 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       });
     },
 
+    watchRevisions(
+      callback: (revisions: RevisionSummary[]) => void,
+      watchOptions: ListRevisionsOptions = {}
+    ): Unsubscribe {
+      if (options.persistence.subscribeRevisions === undefined) {
+        throw new PersistenceError(
+          "Persistence adapter does not support watchRevisions."
+        );
+      }
+
+      return options.persistence.subscribeRevisions(
+        {
+          repoId: options.repoId,
+          ...(watchOptions.branch === undefined
+            ? {}
+            : { branchName: watchOptions.branch }),
+          ...(watchOptions.limit === undefined ? {} : { limit: watchOptions.limit }),
+          ...(watchOptions.after === undefined ? {} : { after: watchOptions.after }),
+          ...(watchOptions.order === undefined ? {} : { order: watchOptions.order })
+        },
+        revisions => {
+          callback([...revisions]);
+        }
+      );
+    },
+
     async tag(name: TagName, tagOptions: TagOptions = {}): Promise<TagRecord> {
       const branchName = resolveBranch(tagOptions.branch);
       let revision = tagOptions.revision;
@@ -438,9 +569,9 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       if (revision === undefined || revision === "HEAD") {
         const head = await repository.getHead({ branch: branchName });
         if (head.status === "dirty") {
-          if (tagOptions.createRevisionIfDirty !== true) {
+          if (tagOptions.createRevisionIfDirty === false) {
             throw new DirtyHeadError(
-              "Cannot tag a dirty HEAD unless createRevisionIfDirty is true."
+              "Cannot tag a dirty HEAD when createRevisionIfDirty is false."
             );
           }
           const commitResult = await repository.commit({
@@ -533,6 +664,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       restoreOptions: RestoreOptions = {}
     ): Promise<UpdateResult<TState>> {
       const branchName = resolveBranch(restoreOptions.branch);
+      const head = await repository.getHead({ branch: branchName });
       const state = await repository.readRevision(revision);
       return writeUpdate(state, {
         branch: branchName,
@@ -544,7 +676,8 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
           : { message: restoreOptions.message }),
         ...(restoreOptions.author === undefined
           ? {}
-          : { author: restoreOptions.author })
+          : { author: restoreOptions.author }),
+        expectedHeadHash: restoreOptions.expectedHeadHash ?? head.stateHash
       });
     },
 
@@ -552,6 +685,10 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       branch: BranchName,
       resetOptions: ResetBranchOptions
     ): Promise<BranchRecord> {
+      if (resetOptions.mode !== "hard") {
+        throw new PersistenceError('resetBranch only supports mode "hard".');
+      }
+
       return options.persistence.resetBranch({
         repoId: options.repoId,
         branchName: branch,

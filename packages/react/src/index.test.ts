@@ -179,6 +179,12 @@ function createRepositoryMock(): ObjectVcsRepository<TestState> {
     async getHead() {
       return head;
     },
+    watchHead(callback) {
+      callback(head);
+      return () => {
+        return;
+      };
+    },
     async update() {
       return {
         head,
@@ -203,6 +209,12 @@ function createRepositoryMock(): ObjectVcsRepository<TestState> {
     },
     async listRevisions() {
       return [revision];
+    },
+    watchRevisions(callback) {
+      callback([revision]);
+      return () => {
+        return;
+      };
     },
     async tag() {
       return tag;

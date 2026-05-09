@@ -342,16 +342,23 @@ function GoblinTavernApp() {
               menuItems={state.menuItems}
               onAdd={() => void addMenuItem(updateDirty)}
               onToggle={id =>
-                void updateDirty(current => ({
-                  ...current,
-                  menuItems: {
-                    ...current.menuItems,
-                    [id]: {
-                      ...current.menuItems[id],
-                      inStock: !current.menuItems[id]?.inStock
-                    } as MenuItem
+                void updateDirty(current => {
+                  const item = current.menuItems[id];
+                  if (item === undefined) {
+                    return current;
                   }
-                }))
+
+                  return {
+                    ...current,
+                    menuItems: {
+                      ...current.menuItems,
+                      [id]: {
+                        ...item,
+                        inStock: !item.inStock
+                      }
+                    }
+                  };
+                })
               }
               onDelete={id =>
                 void updateDirty(current => {
@@ -366,16 +373,23 @@ function GoblinTavernApp() {
               events={state.tavernEvents}
               onAdd={() => void addEvent(updateDirty)}
               onResolve={id =>
-                void updateDirty(current => ({
-                  ...current,
-                  tavernEvents: {
-                    ...current.tavernEvents,
-                    [id]: {
-                      ...current.tavernEvents[id],
-                      resolved: true
-                    } as TavernEvent
+                void updateDirty(current => {
+                  const event = current.tavernEvents[id];
+                  if (event === undefined) {
+                    return current;
                   }
-                }))
+
+                  return {
+                    ...current,
+                    tavernEvents: {
+                      ...current.tavernEvents,
+                      [id]: {
+                        ...event,
+                        resolved: true
+                      }
+                    }
+                  };
+                })
               }
             />
           </section>
