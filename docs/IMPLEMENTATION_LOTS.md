@@ -72,7 +72,7 @@ Implémenter la définition de graph et la validation d’état.
 
 ### Packages concernés
 
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -110,7 +110,7 @@ Implémenter le moteur de versioning avec un adapter mémoire.
 
 ### Packages concernés
 
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -144,7 +144,7 @@ Ajouter les helpers CRUD générés depuis le graph.
 
 ### Packages concernés
 
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -175,7 +175,7 @@ Implémenter la persistance Firestore en mode snapshot.
 
 ### Packages concernés
 
-- `@object-vcs/firebase`.
+- `@bjalon/object-vcs-firebase`.
 
 ### Critères d’acceptation
 
@@ -209,7 +209,7 @@ Fournir l’intégration React minimale.
 
 ### Packages concernés
 
-- `@object-vcs/react`.
+- `@bjalon/object-vcs-react`.
 
 ### Critères d’acceptation
 
@@ -245,9 +245,9 @@ Créer une application de démonstration complète.
 ### Packages concernés
 
 - `examples/goblin-tavern` ;
-- `@object-vcs/core` ;
-- `@object-vcs/firebase` ;
-- `@object-vcs/react`.
+- `@bjalon/object-vcs-core` ;
+- `@bjalon/object-vcs-firebase` ;
+- `@bjalon/object-vcs-react`.
 
 ### Critères d’acceptation
 
@@ -265,7 +265,7 @@ Permettre de remplacer Firebase par un backend custom.
 
 ### Livrables
 
-- package `@object-vcs/http` ;
+- package `@bjalon/object-vcs-http` ;
 - `httpPersistence` ;
 - mapping endpoints vers `PersistenceAdapter` ;
 - gestion auth bearer ;
@@ -277,8 +277,8 @@ Permettre de remplacer Firebase par un backend custom.
 
 ### Packages concernés
 
-- `@object-vcs/http` ;
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-http` ;
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -305,7 +305,7 @@ Fournir l’intégration Vue.
 
 ### Packages concernés
 
-- `@object-vcs/vue`.
+- `@bjalon/object-vcs-vue`.
 
 ### Critères d’acceptation
 
@@ -331,7 +331,7 @@ Fournir une intégration sans framework.
 
 ### Packages concernés
 
-- `@object-vcs/vanilla`.
+- `@bjalon/object-vcs-vanilla`.
 
 ### Critères d’acceptation
 
@@ -361,9 +361,9 @@ Passer du snapshot simple à un stockage plus compact et évolutif.
 
 ### Packages concernés
 
-- `@object-vcs/core` ;
-- `@object-vcs/firebase` ;
-- `@object-vcs/http` ;
+- `@bjalon/object-vcs-core` ;
+- `@bjalon/object-vcs-firebase` ;
+- `@bjalon/object-vcs-http` ;
 - UI packages pour diff viewer.
 
 ### Critères d’acceptation
@@ -451,7 +451,7 @@ Mitigation :
 
 Démarrer par :
 
-1. `@object-vcs/core` avec `memoryPersistence` ;
+1. `@bjalon/object-vcs-core` avec `memoryPersistence` ;
 2. mode snapshot only ;
 3. React timeline minimale ;
 4. Firebase adapter ;

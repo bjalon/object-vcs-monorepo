@@ -752,12 +752,12 @@ Il doit respecter les mêmes invariants que Firebase et HTTP.
 
 ## 20. Adapter Firebase
 
-Package : `@object-vcs/firebase`.
+Package : `@bjalon/object-vcs-firebase`.
 
 ### 20.1 Initialisation
 
 ```ts
-import { firebasePersistence } from "@object-vcs/firebase";
+import { firebasePersistence } from "@bjalon/object-vcs-firebase";
 
 const persistence = firebasePersistence({
   db,
@@ -896,7 +896,7 @@ Les règles Firestore ne remplacent pas une validation de schéma complète côt
 
 ## 21. Adapter HTTP custom
 
-Package prévu : `@object-vcs/http`.
+Package prévu : `@bjalon/object-vcs-http`.
 
 Ce package permet de remplacer Firebase par n’importe quel backend REST compatible avec le contrat décrit dans `BACKEND_HTTP_CONTRACT.md`.
 
@@ -921,7 +921,7 @@ Le backend custom devient responsable de :
 
 ### 22.1 React
 
-Package : `@object-vcs/react`.
+Package : `@bjalon/object-vcs-react`.
 
 Exports :
 
@@ -958,7 +958,7 @@ Composant principal :
 
 ### 22.2 Vue
 
-Package : `@object-vcs/vue`.
+Package : `@bjalon/object-vcs-vue`.
 
 Exports :
 
@@ -979,7 +979,7 @@ DiffViewer
 
 ### 22.3 Vanilla
 
-Package : `@object-vcs/vanilla`.
+Package : `@bjalon/object-vcs-vanilla`.
 
 Exports :
 

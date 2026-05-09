@@ -1,7 +1,7 @@
 # Contrat backend HTTP — Object VCS Storage API
 
 Version : `v1-draft`  
-Package client prévu : `@object-vcs/http`  
+Package client prévu : `@bjalon/object-vcs-http`  
 But : remplacer Firebase par un backend custom.
 
 ## 1. Objectif
@@ -740,7 +740,7 @@ POST /v1/repos/goblin-tavern-demo/tags
 
 ## 27. Compatibilité client
 
-Le client `@object-vcs/http` doit exposer la même interface de persistance que Firebase. Le code applicatif ne doit pas changer lorsqu’on remplace :
+Le client `@bjalon/object-vcs-http` doit exposer la même interface de persistance que Firebase. Le code applicatif ne doit pas changer lorsqu’on remplace :
 
 ```ts
 firebasePersistence(...)

@@ -40,7 +40,7 @@ L’exemple doit montrer :
 
 ```ts
 import { z } from "zod";
-import { defineGraph, singleton, collection, InferState } from "@object-vcs/core";
+import { defineGraph, singleton, collection, InferState } from "@bjalon/object-vcs-core";
 
 export const TavernSchema = z.object({
   id: z.string(),
@@ -279,8 +279,8 @@ export const db = getFirestore(firebaseApp);
 ### 8.3 Repository
 
 ```ts
-import { createRepository } from "@object-vcs/core";
-import { firebasePersistence } from "@object-vcs/firebase";
+import { createRepository } from "@bjalon/object-vcs-core";
+import { firebasePersistence } from "@bjalon/object-vcs-firebase";
 import { db } from "./firebase";
 import { graph } from "./graph";
 

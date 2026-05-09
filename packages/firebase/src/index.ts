@@ -2,4 +2,4 @@ export interface FirebasePersistenceOptions {
   readonly rootCollection?: string;
 }
 
-export const objectVcsFirebasePackage = "@object-vcs/firebase";
+export const objectVcsFirebasePackage = "@bjalon/object-vcs-firebase";

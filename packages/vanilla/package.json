@@ -1,5 +1,5 @@
 {
-  "name": "@object-vcs/vanilla",
+  "name": "@bjalon/object-vcs-vanilla",
   "version": "0.1.0",
   "description": "DOM bindings for Object VCS.",
   "type": "module",
@@ -18,6 +18,6 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
-    "@object-vcs/core": "file:../core"
+    "@bjalon/object-vcs-core": "file:../core"
   }
 }

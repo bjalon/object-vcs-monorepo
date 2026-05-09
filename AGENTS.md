@@ -24,7 +24,7 @@ These documents are authoritative. If implementation details are ambiguous, pref
 - Use npm workspaces unless the repository already uses another package manager.
 - Keep packages ESM-compatible.
 - Public APIs must be explicitly typed.
-- Avoid framework dependencies in `@object-vcs/core`.
+- Avoid framework dependencies in `@bjalon/object-vcs-core`.
 
 ## Architecture
 

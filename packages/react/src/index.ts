@@ -4,4 +4,4 @@ export interface UseHeadResult<TState> {
   readonly error: unknown;
 }
 
-export const objectVcsReactPackage = "@object-vcs/react";
+export const objectVcsReactPackage = "@bjalon/object-vcs-react";

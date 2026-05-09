@@ -4,4 +4,4 @@ export interface UseObjectVcsHeadResult<TState> {
   readonly error: unknown;
 }
 
-export const objectVcsVuePackage = "@object-vcs/vue";
+export const objectVcsVuePackage = "@bjalon/object-vcs-vue";

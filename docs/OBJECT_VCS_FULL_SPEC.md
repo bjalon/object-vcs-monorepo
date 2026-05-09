@@ -13,12 +13,12 @@ Le cas d’usage cible : une application manipule toujours la même structure d�
 ## Packages prévus
 
 ```txt
-@object-vcs/core       Moteur pur TypeScript, schémas, versioning, diffs, adapters.
-@object-vcs/firebase   Adapter Firestore.
-@object-vcs/http       Adapter HTTP pour backend custom.
-@object-vcs/react      Hooks et composants React.
-@object-vcs/vue        Composables et composants Vue.
-@object-vcs/vanilla    Widgets DOM et Web Components.
+@bjalon/object-vcs-core       Moteur pur TypeScript, schémas, versioning, diffs, adapters.
+@bjalon/object-vcs-firebase   Adapter Firestore.
+@bjalon/object-vcs-http       Adapter HTTP pour backend custom.
+@bjalon/object-vcs-react      Hooks et composants React.
+@bjalon/object-vcs-vue        Composables et composants Vue.
+@bjalon/object-vcs-vanilla    Widgets DOM et Web Components.
 ```
 
 ## Principes clés
@@ -38,20 +38,20 @@ Le cas d’usage cible : une application manipule toujours la même structure d�
 ## Installation minimale
 
 ```bash
-pnpm add @object-vcs/core @object-vcs/firebase firebase zod
+pnpm add @bjalon/object-vcs-core @bjalon/object-vcs-firebase firebase zod
 ```
 
 Avec un backend custom compatible HTTP :
 
 ```bash
-pnpm add @object-vcs/core @object-vcs/http zod
+pnpm add @bjalon/object-vcs-core @bjalon/object-vcs-http zod
 ```
 
 ## Définir une grappe d’objets
 
 ```ts
 import { z } from "zod";
-import { defineGraph, singleton, collection, InferState } from "@object-vcs/core";
+import { defineGraph, singleton, collection, InferState } from "@bjalon/object-vcs-core";
 
 const TavernSchema = z.object({
   id: z.string(),
@@ -96,8 +96,8 @@ export type TavernState = InferState<typeof graph>;
 ```ts
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import { createRepository } from "@object-vcs/core";
-import { firebasePersistence } from "@object-vcs/firebase";
+import { createRepository } from "@bjalon/object-vcs-core";
+import { firebasePersistence } from "@bjalon/object-vcs-firebase";
 import { graph } from "./graph";
 
 const app = initializeApp({
@@ -228,11 +228,11 @@ await repo.update(
 
 ## Utilisation avec backend HTTP custom
 
-`@object-vcs/http` fournit un adapter client. Le backend doit implémenter le contrat HTTP décrit dans [`docs/BACKEND_HTTP_CONTRACT.md`](docs/BACKEND_HTTP_CONTRACT.md).
+`@bjalon/object-vcs-http` fournit un adapter client. Le backend doit implémenter le contrat HTTP décrit dans [`docs/BACKEND_HTTP_CONTRACT.md`](docs/BACKEND_HTTP_CONTRACT.md).
 
 ```ts
-import { createRepository } from "@object-vcs/core";
-import { httpPersistence } from "@object-vcs/http";
+import { createRepository } from "@bjalon/object-vcs-core";
+import { httpPersistence } from "@bjalon/object-vcs-http";
 import { graph } from "./graph";
 
 export const repo = createRepository({
@@ -282,7 +282,7 @@ Le backend doit garantir au minimum :
 ## React
 
 ```tsx
-import { ObjectVcsProvider, RevisionTimeline, useHead } from "@object-vcs/react";
+import { ObjectVcsProvider, RevisionTimeline, useHead } from "@bjalon/object-vcs-react";
 
 function App() {
   return (
@@ -335,7 +335,7 @@ function Editor() {
 
 ```vue
 <script setup lang="ts">
-import { useHead, RevisionTimeline } from "@object-vcs/vue";
+import { useHead, RevisionTimeline } from "@bjalon/object-vcs-vue";
 
 const { head, update, commit } = useHead();
 
@@ -363,7 +363,7 @@ async function increaseChaos() {
 ## Vanilla
 
 ```ts
-import { createRevisionTimeline } from "@object-vcs/vanilla";
+import { createRevisionTimeline } from "@bjalon/object-vcs-vanilla";
 
 createRevisionTimeline(document.querySelector("#timeline")!, {
   repo,
@@ -1144,12 +1144,12 @@ Il doit respecter les mêmes invariants que Firebase et HTTP.
 
 ## 20. Adapter Firebase
 
-Package : `@object-vcs/firebase`.
+Package : `@bjalon/object-vcs-firebase`.
 
 ### 20.1 Initialisation
 
 ```ts
-import { firebasePersistence } from "@object-vcs/firebase";
+import { firebasePersistence } from "@bjalon/object-vcs-firebase";
 
 const persistence = firebasePersistence({
   db,
@@ -1288,7 +1288,7 @@ Les règles Firestore ne remplacent pas une validation de schéma complète côt
 
 ## 21. Adapter HTTP custom
 
-Package prévu : `@object-vcs/http`.
+Package prévu : `@bjalon/object-vcs-http`.
 
 Ce package permet de remplacer Firebase par n’importe quel backend REST compatible avec le contrat décrit dans `BACKEND_HTTP_CONTRACT.md`.
 
@@ -1313,7 +1313,7 @@ Le backend custom devient responsable de :
 
 ### 22.1 React
 
-Package : `@object-vcs/react`.
+Package : `@bjalon/object-vcs-react`.
 
 Exports :
 
@@ -1350,7 +1350,7 @@ Composant principal :
 
 ### 22.2 Vue
 
-Package : `@object-vcs/vue`.
+Package : `@bjalon/object-vcs-vue`.
 
 Exports :
 
@@ -1371,7 +1371,7 @@ DiffViewer
 
 ### 22.3 Vanilla
 
-Package : `@object-vcs/vanilla`.
+Package : `@bjalon/object-vcs-vanilla`.
 
 Exports :
 
@@ -1559,7 +1559,7 @@ Le système doit garantir :
 # Contrat backend HTTP — Object VCS Storage API
 
 Version : `v1-draft`  
-Package client prévu : `@object-vcs/http`  
+Package client prévu : `@bjalon/object-vcs-http`  
 But : remplacer Firebase par un backend custom.
 
 ## 1. Objectif
@@ -2298,7 +2298,7 @@ POST /v1/repos/goblin-tavern-demo/tags
 
 ## 27. Compatibilité client
 
-Le client `@object-vcs/http` doit exposer la même interface de persistance que Firebase. Le code applicatif ne doit pas changer lorsqu’on remplace :
+Le client `@bjalon/object-vcs-http` doit exposer la même interface de persistance que Firebase. Le code applicatif ne doit pas changer lorsqu’on remplace :
 
 ```ts
 firebasePersistence(...)
@@ -2355,7 +2355,7 @@ L’exemple doit montrer :
 
 ```ts
 import { z } from "zod";
-import { defineGraph, singleton, collection, InferState } from "@object-vcs/core";
+import { defineGraph, singleton, collection, InferState } from "@bjalon/object-vcs-core";
 
 export const TavernSchema = z.object({
   id: z.string(),
@@ -2594,8 +2594,8 @@ export const db = getFirestore(firebaseApp);
 ### 8.3 Repository
 
 ```ts
-import { createRepository } from "@object-vcs/core";
-import { firebasePersistence } from "@object-vcs/firebase";
+import { createRepository } from "@bjalon/object-vcs-core";
+import { firebasePersistence } from "@bjalon/object-vcs-firebase";
 import { db } from "./firebase";
 import { graph } from "./graph";
 
@@ -2880,7 +2880,7 @@ Implémenter la définition de graph et la validation d’état.
 
 ### Packages concernés
 
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -2918,7 +2918,7 @@ Implémenter le moteur de versioning avec un adapter mémoire.
 
 ### Packages concernés
 
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -2952,7 +2952,7 @@ Ajouter les helpers CRUD générés depuis le graph.
 
 ### Packages concernés
 
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -2983,7 +2983,7 @@ Implémenter la persistance Firestore en mode snapshot.
 
 ### Packages concernés
 
-- `@object-vcs/firebase`.
+- `@bjalon/object-vcs-firebase`.
 
 ### Critères d’acceptation
 
@@ -3017,7 +3017,7 @@ Fournir l’intégration React minimale.
 
 ### Packages concernés
 
-- `@object-vcs/react`.
+- `@bjalon/object-vcs-react`.
 
 ### Critères d’acceptation
 
@@ -3053,9 +3053,9 @@ Créer une application de démonstration complète.
 ### Packages concernés
 
 - `examples/goblin-tavern` ;
-- `@object-vcs/core` ;
-- `@object-vcs/firebase` ;
-- `@object-vcs/react`.
+- `@bjalon/object-vcs-core` ;
+- `@bjalon/object-vcs-firebase` ;
+- `@bjalon/object-vcs-react`.
 
 ### Critères d’acceptation
 
@@ -3073,7 +3073,7 @@ Permettre de remplacer Firebase par un backend custom.
 
 ### Livrables
 
-- package `@object-vcs/http` ;
+- package `@bjalon/object-vcs-http` ;
 - `httpPersistence` ;
 - mapping endpoints vers `PersistenceAdapter` ;
 - gestion auth bearer ;
@@ -3085,8 +3085,8 @@ Permettre de remplacer Firebase par un backend custom.
 
 ### Packages concernés
 
-- `@object-vcs/http` ;
-- `@object-vcs/core`.
+- `@bjalon/object-vcs-http` ;
+- `@bjalon/object-vcs-core`.
 
 ### Critères d’acceptation
 
@@ -3113,7 +3113,7 @@ Fournir l’intégration Vue.
 
 ### Packages concernés
 
-- `@object-vcs/vue`.
+- `@bjalon/object-vcs-vue`.
 
 ### Critères d’acceptation
 
@@ -3139,7 +3139,7 @@ Fournir une intégration sans framework.
 
 ### Packages concernés
 
-- `@object-vcs/vanilla`.
+- `@bjalon/object-vcs-vanilla`.
 
 ### Critères d’acceptation
 
@@ -3169,9 +3169,9 @@ Passer du snapshot simple à un stockage plus compact et évolutif.
 
 ### Packages concernés
 
-- `@object-vcs/core` ;
-- `@object-vcs/firebase` ;
-- `@object-vcs/http` ;
+- `@bjalon/object-vcs-core` ;
+- `@bjalon/object-vcs-firebase` ;
+- `@bjalon/object-vcs-http` ;
 - UI packages pour diff viewer.
 
 ### Critères d’acceptation
@@ -3259,7 +3259,7 @@ Mitigation :
 
 Démarrer par :
 
-1. `@object-vcs/core` avec `memoryPersistence` ;
+1. `@bjalon/object-vcs-core` avec `memoryPersistence` ;
 2. mode snapshot only ;
 3. React timeline minimale ;
 4. Firebase adapter ;

@@ -1,5 +1,5 @@
 {
-  "name": "@object-vcs/example-goblin-tavern",
+  "name": "@bjalon/object-vcs-example-goblin-tavern",
   "version": "0.1.0",
   "private": true,
   "description": "Goblin Tavern VCS example scaffold.",
@@ -11,8 +11,8 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
-    "@object-vcs/core": "file:../../packages/core",
-    "@object-vcs/firebase": "file:../../packages/firebase",
-    "@object-vcs/react": "file:../../packages/react"
+    "@bjalon/object-vcs-core": "file:../../packages/core",
+    "@bjalon/object-vcs-firebase": "file:../../packages/firebase",
+    "@bjalon/object-vcs-react": "file:../../packages/react"
   }
 }

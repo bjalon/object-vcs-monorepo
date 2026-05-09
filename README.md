@@ -7,12 +7,12 @@ Le cas d’usage cible : une application manipule toujours la même structure d�
 ## Packages prévus
 
 ```txt
-@object-vcs/core       Moteur pur TypeScript, schémas, versioning, diffs, adapters.
-@object-vcs/firebase   Adapter Firestore.
-@object-vcs/http       Adapter HTTP pour backend custom.
-@object-vcs/react      Hooks et composants React.
-@object-vcs/vue        Composables et composants Vue.
-@object-vcs/vanilla    Widgets DOM et Web Components.
+@bjalon/object-vcs-core       Moteur pur TypeScript, schémas, versioning, diffs, adapters.
+@bjalon/object-vcs-firebase   Adapter Firestore.
+@bjalon/object-vcs-http       Adapter HTTP pour backend custom.
+@bjalon/object-vcs-react      Hooks et composants React.
+@bjalon/object-vcs-vue        Composables et composants Vue.
+@bjalon/object-vcs-vanilla    Widgets DOM et Web Components.
 ```
 
 ## Principes clés
@@ -32,20 +32,20 @@ Le cas d’usage cible : une application manipule toujours la même structure d�
 ## Installation minimale
 
 ```bash
-pnpm add @object-vcs/core @object-vcs/firebase firebase zod
+pnpm add @bjalon/object-vcs-core @bjalon/object-vcs-firebase firebase zod
 ```
 
 Avec un backend custom compatible HTTP :
 
 ```bash
-pnpm add @object-vcs/core @object-vcs/http zod
+pnpm add @bjalon/object-vcs-core @bjalon/object-vcs-http zod
 ```
 
 ## Définir une grappe d’objets
 
 ```ts
 import { z } from "zod";
-import { defineGraph, singleton, collection, InferState } from "@object-vcs/core";
+import { defineGraph, singleton, collection, InferState } from "@bjalon/object-vcs-core";
 
 const TavernSchema = z.object({
   id: z.string(),
@@ -90,8 +90,8 @@ export type TavernState = InferState<typeof graph>;
 ```ts
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
-import { createRepository } from "@object-vcs/core";
-import { firebasePersistence } from "@object-vcs/firebase";
+import { createRepository } from "@bjalon/object-vcs-core";
+import { firebasePersistence } from "@bjalon/object-vcs-firebase";
 import { graph } from "./graph";
 
 const app = initializeApp({
@@ -222,11 +222,11 @@ await repo.update(
 
 ## Utilisation avec backend HTTP custom
 
-`@object-vcs/http` fournit un adapter client. Le backend doit implémenter le contrat HTTP décrit dans [`docs/BACKEND_HTTP_CONTRACT.md`](docs/BACKEND_HTTP_CONTRACT.md).
+`@bjalon/object-vcs-http` fournit un adapter client. Le backend doit implémenter le contrat HTTP décrit dans [`docs/BACKEND_HTTP_CONTRACT.md`](docs/BACKEND_HTTP_CONTRACT.md).
 
 ```ts
-import { createRepository } from "@object-vcs/core";
-import { httpPersistence } from "@object-vcs/http";
+import { createRepository } from "@bjalon/object-vcs-core";
+import { httpPersistence } from "@bjalon/object-vcs-http";
 import { graph } from "./graph";
 
 export const repo = createRepository({
@@ -276,7 +276,7 @@ Le backend doit garantir au minimum :
 ## React
 
 ```tsx
-import { ObjectVcsProvider, RevisionTimeline, useHead } from "@object-vcs/react";
+import { ObjectVcsProvider, RevisionTimeline, useHead } from "@bjalon/object-vcs-react";
 
 function App() {
   return (
@@ -329,7 +329,7 @@ function Editor() {
 
 ```vue
 <script setup lang="ts">
-import { useHead, RevisionTimeline } from "@object-vcs/vue";
+import { useHead, RevisionTimeline } from "@bjalon/object-vcs-vue";
 
 const { head, update, commit } = useHead();
 
@@ -357,7 +357,7 @@ async function increaseChaos() {
 ## Vanilla
 
 ```ts
-import { createRevisionTimeline } from "@object-vcs/vanilla";
+import { createRevisionTimeline } from "@bjalon/object-vcs-vanilla";
 
 createRevisionTimeline(document.querySelector("#timeline")!, {
   repo,

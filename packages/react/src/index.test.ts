@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { objectVcsReactPackage, type UseHeadResult } from "./index.js";
 
-describe("@object-vcs/react public entrypoint", () => {
+describe("@bjalon/object-vcs-react public entrypoint", () => {
   it("exports minimal hook result types", () => {
     const result: UseHeadResult<{ value: string }> = {
       state: null,
@@ -11,6 +11,6 @@ describe("@object-vcs/react public entrypoint", () => {
     };
 
     expect(result.state).toBeNull();
-    expect(objectVcsReactPackage).toBe("@object-vcs/react");
+    expect(objectVcsReactPackage).toBe("@bjalon/object-vcs-react");
   });
 });

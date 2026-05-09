@@ -6,11 +6,11 @@
     "moduleResolution": "NodeNext",
     "baseUrl": ".",
     "paths": {
-      "@object-vcs/core": ["packages/core/src/index.ts"],
-      "@object-vcs/firebase": ["packages/firebase/src/index.ts"],
-      "@object-vcs/react": ["packages/react/src/index.ts"],
-      "@object-vcs/vanilla": ["packages/vanilla/src/index.ts"],
-      "@object-vcs/vue": ["packages/vue/src/index.ts"]
+      "@bjalon/object-vcs-core": ["packages/core/src/index.ts"],
+      "@bjalon/object-vcs-firebase": ["packages/firebase/src/index.ts"],
+      "@bjalon/object-vcs-react": ["packages/react/src/index.ts"],
+      "@bjalon/object-vcs-vanilla": ["packages/vanilla/src/index.ts"],
+      "@bjalon/object-vcs-vue": ["packages/vue/src/index.ts"]
     },
     "strict": true,
     "noImplicitOverride": true,

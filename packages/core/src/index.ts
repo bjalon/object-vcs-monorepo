@@ -66,4 +66,4 @@ export interface TagRecord {
   createdBy?: string;
 }
 
-export const objectVcsCorePackage = "@object-vcs/core";
+export const objectVcsCorePackage = "@bjalon/object-vcs-core";
