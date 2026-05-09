@@ -24,6 +24,8 @@ export class RepositoryNotFoundError extends ObjectVcsError {}
 export class RepositoryAlreadyExistsError extends ObjectVcsError {}
 export class BranchNotFoundError extends ObjectVcsError {}
 export class BranchAlreadyExistsError extends ObjectVcsError {}
+export class EntityNotFoundError extends ObjectVcsError {}
+export class EntityAlreadyExistsError extends ObjectVcsError {}
 export class RevisionNotFoundError extends ObjectVcsError {}
 export class TagAlreadyExistsError extends ObjectVcsError {}
 export class DirtyHeadError extends ObjectVcsError {}

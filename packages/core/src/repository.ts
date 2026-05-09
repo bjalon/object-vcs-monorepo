@@ -1,9 +1,18 @@
 import {
   BranchNotFoundError,
   DirtyHeadError,
+  EntityAlreadyExistsError,
+  EntityNotFoundError,
   RevisionNotFoundError
 } from "./errors.js";
-import type { ObjectVcsGraph, InferState } from "./graph.js";
+import type {
+  CollectionGraphEntry,
+  GraphEntries,
+  InferEntryState,
+  InferState,
+  ObjectVcsGraph,
+  SingletonGraphEntry
+} from "./graph.js";
 import { hashState } from "./hash.js";
 import { cloneJson } from "./json.js";
 import type {
@@ -150,9 +159,78 @@ export interface ObjectVcsRepository<TState> {
   ): Promise<BranchRecord>;
 }
 
+type EntriesOf<TGraph extends ObjectVcsGraph> =
+  TGraph extends ObjectVcsGraph<infer TEntries> ? TEntries : never;
+
+export type SingletonEntryName<TGraph extends ObjectVcsGraph> = {
+  [TKey in keyof EntriesOf<TGraph>]: EntriesOf<TGraph>[TKey] extends SingletonGraphEntry<unknown>
+    ? TKey
+    : never;
+}[keyof EntriesOf<TGraph>] & string;
+
+export type CollectionEntryName<TGraph extends ObjectVcsGraph> = {
+  [TKey in keyof EntriesOf<TGraph>]: EntriesOf<TGraph>[TKey] extends CollectionGraphEntry<unknown>
+    ? TKey
+    : never;
+}[keyof EntriesOf<TGraph>] & string;
+
+export type CollectionEntityState<TEntry> =
+  TEntry extends CollectionGraphEntry<infer TValue> ? TValue : never;
+
+export interface SingletonCrudHelper<TState, TValue> {
+  get(options?: GetHeadOptions): Promise<TValue>;
+  set(value: TValue, options?: UpdateOptions): Promise<UpdateResult<TState>>;
+  update(
+    updater: (current: TValue) => TValue,
+    options?: UpdateOptions
+  ): Promise<UpdateResult<TState>>;
+}
+
+export interface EntityCrudHelper<TState, TValue> {
+  list(options?: GetHeadOptions): Promise<Record<string, TValue>>;
+  get(id: string, options?: GetHeadOptions): Promise<TValue | null>;
+  create(
+    id: string,
+    value: TValue,
+    options?: UpdateOptions
+  ): Promise<UpdateResult<TState>>;
+  update(
+    id: string,
+    updater: (current: TValue) => TValue,
+    options?: UpdateOptions
+  ): Promise<UpdateResult<TState>>;
+  delete(id: string, options?: UpdateOptions): Promise<UpdateResult<TState>>;
+}
+
+export type SingletonCrudHelpers<
+  TGraph extends ObjectVcsGraph,
+  TState
+> = {
+  readonly [TKey in SingletonEntryName<TGraph>]: SingletonCrudHelper<
+    TState,
+    InferEntryState<EntriesOf<TGraph>[TKey]>
+  >;
+};
+
+export type EntityCrudHelpers<
+  TGraph extends ObjectVcsGraph,
+  TState
+> = {
+  readonly [TKey in CollectionEntryName<TGraph>]: EntityCrudHelper<
+    TState,
+    CollectionEntityState<EntriesOf<TGraph>[TKey]>
+  >;
+};
+
+export type ObjectVcsTypedRepository<TGraph extends ObjectVcsGraph> =
+  ObjectVcsRepository<InferState<TGraph>> & {
+    readonly singletons: SingletonCrudHelpers<TGraph, InferState<TGraph>>;
+    readonly entities: EntityCrudHelpers<TGraph, InferState<TGraph>>;
+  };
+
 export function createRepository<TGraph extends ObjectVcsGraph>(
   options: CreateRepositoryOptions<TGraph>
-): ObjectVcsRepository<InferState<TGraph>> {
+): ObjectVcsTypedRepository<TGraph> {
   type TState = InferState<TGraph>;
 
   let activeBranch = options.defaultBranch ?? "main";
@@ -217,7 +295,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     };
   }
 
-  return {
+  const repository: ObjectVcsRepository<TState> = {
     async init(initOptions: InitOptions<TState>): Promise<InitResult<TState>> {
       activeBranch = initOptions.branch ?? defaultBranch;
       const initialState = validateState(initOptions.initialState);
@@ -265,7 +343,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       updater: (current: TState) => TState,
       updateOptions: UpdateOptions = {}
     ): Promise<UpdateResult<TState>> {
-      const current = await this.getHead(
+      const current = await repository.getHead(
         updateOptions.branch === undefined
           ? {}
           : { branch: updateOptions.branch }
@@ -277,7 +355,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       recipe: (draft: TState) => void,
       updateOptions: UpdateOptions = {}
     ): Promise<UpdateResult<TState>> {
-      const current = await this.getHead(
+      const current = await repository.getHead(
         updateOptions.branch === undefined
           ? {}
           : { branch: updateOptions.branch }
@@ -291,7 +369,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       commitOptions: CommitOptions = {}
     ): Promise<CommitResult<TState>> {
       const branchName = resolveBranch(commitOptions.branch);
-      const head = await this.getHead({ branch: branchName });
+      const head = await repository.getHead({ branch: branchName });
       const result = await options.persistence.createRevision({
         repoId: options.repoId,
         branchName,
@@ -354,14 +432,14 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       let revision = tagOptions.revision;
 
       if (revision === undefined || revision === "HEAD") {
-        const head = await this.getHead({ branch: branchName });
+        const head = await repository.getHead({ branch: branchName });
         if (head.status === "dirty") {
           if (tagOptions.createRevisionIfDirty !== true) {
             throw new DirtyHeadError(
               "Cannot tag a dirty HEAD unless createRevisionIfDirty is true."
             );
           }
-          const commitResult = await this.commit({
+          const commitResult = await repository.commit({
             branch: branchName,
             message: `Create revision for tag ${name}`,
             ...(tagOptions.author === undefined
@@ -445,7 +523,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       restoreOptions: RestoreOptions = {}
     ): Promise<UpdateResult<TState>> {
       const branchName = resolveBranch(restoreOptions.branch);
-      const state = await this.readRevision(revision);
+      const state = await repository.readRevision(revision);
       return writeUpdate(state, {
         branch: branchName,
         ...(restoreOptions.commit === undefined
@@ -476,4 +554,194 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       });
     }
   };
+
+  const crudHelpers = createCrudHelpers(options.graph, repository);
+
+  return {
+    ...repository,
+    singletons: crudHelpers.singletons,
+    entities: crudHelpers.entities
+  };
+}
+
+function createCrudHelpers<TGraph extends ObjectVcsGraph>(
+  graph: TGraph,
+  repository: ObjectVcsRepository<InferState<TGraph>>
+): Pick<ObjectVcsTypedRepository<TGraph>, "singletons" | "entities"> {
+  type TState = InferState<TGraph>;
+
+  const singletons: Partial<Record<string, SingletonCrudHelper<TState, unknown>>> =
+    {};
+  const entities: Partial<Record<string, EntityCrudHelper<TState, unknown>>> = {};
+
+  for (const [entryName, entry] of Object.entries(graph.entries as GraphEntries)) {
+    if (entry.kind === "singleton") {
+      singletons[entryName] = createSingletonCrudHelper(entryName, repository);
+      continue;
+    }
+
+    entities[entryName] = createEntityCrudHelper(entryName, repository);
+  }
+
+  return {
+    singletons: singletons as SingletonCrudHelpers<TGraph, TState>,
+    entities: entities as EntityCrudHelpers<TGraph, TState>
+  };
+}
+
+function createSingletonCrudHelper<TState, TValue>(
+  entryName: string,
+  repository: ObjectVcsRepository<TState>
+): SingletonCrudHelper<TState, TValue> {
+  return {
+    async get(options: GetHeadOptions = {}): Promise<TValue> {
+      const head = await repository.getHead(options);
+      return cloneJson(readStateEntry(head.state, entryName) as TValue);
+    },
+
+    async set(
+      value: TValue,
+      options: UpdateOptions = {}
+    ): Promise<UpdateResult<TState>> {
+      return repository.update(
+        current => writeStateEntry(current, entryName, value),
+        options
+      );
+    },
+
+    async update(
+      updater: (current: TValue) => TValue,
+      options: UpdateOptions = {}
+    ): Promise<UpdateResult<TState>> {
+      return repository.update(current => {
+        const value = cloneJson(readStateEntry(current, entryName) as TValue);
+        return writeStateEntry(current, entryName, updater(value));
+      }, options);
+    }
+  };
+}
+
+function createEntityCrudHelper<TState, TValue>(
+  entryName: string,
+  repository: ObjectVcsRepository<TState>
+): EntityCrudHelper<TState, TValue> {
+  return {
+    async list(options: GetHeadOptions = {}): Promise<Record<string, TValue>> {
+      const head = await repository.getHead(options);
+      return cloneJson(readCollectionEntry<TValue>(head.state, entryName));
+    },
+
+    async get(id: string, options: GetHeadOptions = {}): Promise<TValue | null> {
+      const head = await repository.getHead(options);
+      const collection = readCollectionEntry<TValue>(head.state, entryName);
+
+      if (!Object.hasOwn(collection, id)) {
+        return null;
+      }
+
+      return cloneJson(collection[id] as TValue);
+    },
+
+    async create(
+      id: string,
+      value: TValue,
+      options: UpdateOptions = {}
+    ): Promise<UpdateResult<TState>> {
+      return repository.update(current => {
+        const collection = readCollectionEntry<TValue>(current, entryName);
+
+        if (Object.hasOwn(collection, id)) {
+          throw new EntityAlreadyExistsError(
+            `Entity "${id}" already exists in collection "${entryName}".`
+          );
+        }
+
+        return writeStateEntry(current, entryName, {
+          ...collection,
+          [id]: value
+        });
+      }, options);
+    },
+
+    async update(
+      id: string,
+      updater: (current: TValue) => TValue,
+      options: UpdateOptions = {}
+    ): Promise<UpdateResult<TState>> {
+      return repository.update(current => {
+        const collection = readCollectionEntry<TValue>(current, entryName);
+
+        if (!Object.hasOwn(collection, id)) {
+          throw new EntityNotFoundError(
+            `Entity "${id}" was not found in collection "${entryName}".`
+          );
+        }
+
+        return writeStateEntry(current, entryName, {
+          ...collection,
+          [id]: updater(cloneJson(collection[id] as TValue))
+        });
+      }, options);
+    },
+
+    async delete(
+      id: string,
+      options: UpdateOptions = {}
+    ): Promise<UpdateResult<TState>> {
+      return repository.update(current => {
+        const collection = readCollectionEntry<TValue>(current, entryName);
+
+        if (!Object.hasOwn(collection, id)) {
+          throw new EntityNotFoundError(
+            `Entity "${id}" was not found in collection "${entryName}".`
+          );
+        }
+
+        const nextCollection = Object.fromEntries(
+          Object.entries(collection).filter(([entityId]) => entityId !== id)
+        ) as Record<string, TValue>;
+
+        return writeStateEntry(current, entryName, nextCollection);
+      }, options);
+    }
+  };
+}
+
+function readStateEntry<TState>(state: TState, entryName: string): unknown {
+  return (state as object as Record<string, unknown>)[entryName];
+}
+
+function writeStateEntry<TState>(
+  state: TState,
+  entryName: string,
+  value: unknown
+): TState {
+  return {
+    ...(state as object as Record<string, unknown>),
+    [entryName]: value
+  } as TState;
+}
+
+function readCollectionEntry<TValue>(
+  state: unknown,
+  entryName: string
+): Record<string, TValue> {
+  const value = readStateEntry(state, entryName);
+
+  if (!isRecord(value)) {
+    throw new EntityNotFoundError(
+      `Collection "${entryName}" was not found on the current state.`
+    );
+  }
+
+  return value as Record<string, TValue>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
