@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "eslint \"src/**/*.{ts,tsx}\" \"vite.config.ts\""
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"vite.config.ts\"",
+    "firebase:rules:deploy": "sh -c 'set -a; [ -f .env.local ] && . ./.env.local; set +a; test -n \"$VITE_FIREBASE_PROJECT_ID\" || { echo \"Missing VITE_FIREBASE_PROJECT_ID in .env.local or environment\"; exit 1; }; firebase deploy --only firestore:rules --project \"$VITE_FIREBASE_PROJECT_ID\"'"
   },
   "dependencies": {
     "@bjalon/object-vcs-core": "file:../../packages/core",
@@ -24,6 +25,7 @@
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "firebase-tools": "^14.22.0",
     "vite": "^5.4.21"
   }
 }

@@ -12,7 +12,8 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present"
+    "lint": "npm run lint --workspaces --if-present",
+    "deploy:firebase:rules": "npm --workspace @bjalon/object-vcs-example-goblin-tavern run firebase:rules:deploy"
   },
   "devDependencies": {
     "@eslint/js": "^9.16.0",

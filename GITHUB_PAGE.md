@@ -60,6 +60,14 @@ service cloud.firestore {
 
 Ces regles ne doivent pas etre utilisees en production. Pour une demo avec authentification, utiliser les regles documentees dans `docs/EXAMPLE_APP_GOBLIN_TAVERN.md`.
 
+Pour deployer les rules depuis le poste local, renseigner `examples/goblin-tavern/.env.local`, puis lancer depuis la racine :
+
+```bash
+npm run deploy:firebase:rules
+```
+
+Le script charge `VITE_FIREBASE_PROJECT_ID` depuis `.env.local` et execute `firebase deploy --only firestore:rules`.
+
 ## 3. URL et base path
 
 Le build Pages utilise `GITHUB_PAGES=true`, ce qui configure Vite avec :
