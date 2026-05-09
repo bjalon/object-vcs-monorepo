@@ -1,0 +1,23 @@
+{
+  "name": "@object-vcs/vanilla",
+  "version": "0.1.0",
+  "description": "DOM bindings for Object VCS.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "eslint \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@object-vcs/core": "file:../core"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "baseUrl": ".",
+    "paths": {
+      "@object-vcs/core": ["packages/core/src/index.ts"],
+      "@object-vcs/firebase": ["packages/firebase/src/index.ts"],
+      "@object-vcs/react": ["packages/react/src/index.ts"],
+      "@object-vcs/vanilla": ["packages/vanilla/src/index.ts"],
+      "@object-vcs/vue": ["packages/vue/src/index.ts"]
+    },
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "skipLibCheck": true
+  }
+}
