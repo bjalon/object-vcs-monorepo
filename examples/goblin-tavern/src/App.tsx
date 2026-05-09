@@ -1,79 +1,722 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import {
+  BranchNotFoundError,
+  RepositoryAlreadyExistsError,
+  type BranchRecord,
+  type Head,
+  type RevisionSummary,
+  type TagRecord
+} from "@bjalon/object-vcs-core";
+import { ObjectVcsProvider, RevisionTimeline } from "@bjalon/object-vcs-react";
+
 import { firebaseRuntimeStatus, objectVcsRepoId } from "./firebase.js";
+import type { Goblin, MenuItem, TavernEvent, TavernState } from "./graph.js";
+import { initialState } from "./initialState.js";
 import { goblinTavernExample } from "./index.js";
+import { goblinTavernRepository } from "./repo.js";
 import "./styles.css";
 
-const plannedPackages = [
-  "@bjalon/object-vcs-core",
-  "@bjalon/object-vcs-firebase",
-  "@bjalon/object-vcs-react"
+type BusyAction =
+  | "init"
+  | "dirty"
+  | "commit"
+  | "tag"
+  | "branch"
+  | "restore"
+  | "checkout"
+  | "preview";
+
+const goblinNames = ["Mog", "Blim", "Traka", "Nurz", "Pifang"] as const;
+const snacks = [
+  "biscuit de cave",
+  "cornichon volcanique",
+  "tartine de boue",
+  "chips de racine"
 ] as const;
 
 export function App() {
-  const firebaseStatusLabel = firebaseRuntimeStatus.configured
-    ? "Firebase configure"
-    : "Firebase a configurer";
+  if (!firebaseRuntimeStatus.configured || goblinTavernRepository === null) {
+    return <ConfigurationScreen />;
+  }
 
   return (
+    <ObjectVcsProvider repository={goblinTavernRepository}>
+      <GoblinTavernApp />
+    </ObjectVcsProvider>
+  );
+}
+
+function ConfigurationScreen() {
+  return (
     <main className="app-shell">
-      <section className="hero">
-        <p className="eyebrow">Object VCS example</p>
-        <h1>{goblinTavernExample.name}</h1>
-        <p className="summary">
-          Exemple GitHub Pages pour valider la chaine build, publication et
-          injection de configuration Firebase.
+      <section className="topbar">
+        <div>
+          <p className="eyebrow">Object VCS example</p>
+          <h1>{goblinTavernExample.name}</h1>
+        </div>
+        <span className="status-pill warning">Firebase missing</span>
+      </section>
+
+      <section className="panel warning-panel">
+        <h2>Configuration Firebase incomplete</h2>
+        <p>
+          Configure les variables Vite avant de demarrer ou publier
+          l'application.
         </p>
-      </section>
-
-      <section className="status-grid" aria-label="Etat du deploiement">
-        <article>
-          <span>Deploiement</span>
-          <strong>{goblinTavernExample.deploymentTarget}</strong>
-        </article>
-        <article>
-          <span>Repository demo</span>
-          <strong>{objectVcsRepoId}</strong>
-        </article>
-        <article>
-          <span>Firebase</span>
-          <strong>{firebaseStatusLabel}</strong>
-        </article>
-      </section>
-
-      {firebaseRuntimeStatus.configured ? (
-        <section className="panel">
-          <h2>Configuration active</h2>
-          <p>
-            Projet Firebase detecte :{" "}
-            <strong>{firebaseRuntimeStatus.projectId}</strong>.
-          </p>
-        </section>
-      ) : (
-        <section className="panel warning">
-          <h2>Configuration Firebase incomplete</h2>
-          <p>
-            Ajoute les secrets GitHub Actions documentes dans{" "}
-            <code>GITHUB_PAGE.md</code> pour activer Firebase sur Pages.
-          </p>
-          <ul>
-            {firebaseRuntimeStatus.missingVariables.map(variableName => (
-              <li key={variableName}>
-                <code>{variableName}</code>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <section className="panel">
-        <h2>Packages relies</h2>
-        <ul className="package-list">
-          {plannedPackages.map(packageName => (
-            <li key={packageName}>
-              <code>{packageName}</code>
+        <ul className="code-list">
+          {firebaseRuntimeStatus.missingVariables.map(variableName => (
+            <li key={variableName}>
+              <code>{variableName}</code>
             </li>
           ))}
         </ul>
       </section>
     </main>
   );
+}
+
+function GoblinTavernApp() {
+  const repo = useMemo(() => {
+    if (goblinTavernRepository === null) {
+      throw new Error("Goblin Tavern repository is not configured.");
+    }
+
+    return goblinTavernRepository;
+  }, []);
+  const [activeBranch, setActiveBranch] = useState("main");
+  const [head, setHead] = useState<Head<TavernState> | null>(null);
+  const [revisions, setRevisions] = useState<readonly RevisionSummary[]>([]);
+  const [tags, setTags] = useState<readonly TagRecord[]>([]);
+  const [branches, setBranches] = useState<readonly BranchRecord[]>([]);
+  const [selectedRevision, setSelectedRevision] =
+    useState<RevisionSummary | null>(null);
+  const [selectedState, setSelectedState] = useState<TavernState | null>(null);
+  const [message, setMessage] = useState("Service du soir");
+  const [tagName, setTagName] = useState("menu-halloween");
+  const [branchName, setBranchName] = useState("univers-sans-soupe");
+  const [busy, setBusy] = useState<BusyAction | null>(null);
+  const [error, setError] = useState<unknown>(undefined);
+
+  const refresh = useCallback(async () => {
+    setError(undefined);
+
+    try {
+      const [nextHead, nextRevisions, nextTags, nextBranches] =
+        await Promise.all([
+          repo.getHead({ branch: activeBranch }),
+          repo.listRevisions({ limit: 50 }),
+          repo.listTags(),
+          repo.listBranches()
+        ]);
+      setHead(nextHead);
+      setRevisions(nextRevisions);
+      setTags(nextTags);
+      setBranches(nextBranches);
+    } catch (caughtError: unknown) {
+      if (caughtError instanceof BranchNotFoundError) {
+        setHead(null);
+        setRevisions([]);
+        setTags([]);
+        setBranches([]);
+        return;
+      }
+
+      setError(caughtError);
+    }
+  }, [activeBranch, repo]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const state = head?.state ?? null;
+  const taggedRevisionNames = useMemo(
+    () => new Map(tags.map(tag => [tag.name, tag.revision])),
+    [tags]
+  );
+
+  async function runAction(action: BusyAction, task: () => Promise<void>) {
+    setBusy(action);
+    setError(undefined);
+
+    try {
+      await task();
+      await refresh();
+    } catch (caughtError: unknown) {
+      setError(caughtError);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function initializeRepository() {
+    await runAction("init", async () => {
+      try {
+        await repo.init({
+          initialState,
+          branch: "main",
+          message: "Ouverture de la taverne",
+          author: "Goblin Tavern"
+        });
+        setActiveBranch("main");
+      } catch (caughtError: unknown) {
+        if (!(caughtError instanceof RepositoryAlreadyExistsError)) {
+          throw caughtError;
+        }
+      }
+    });
+  }
+
+  async function updateDirty(updater: (current: TavernState) => TavernState) {
+    await runAction("dirty", async () => {
+      await repo.update(updater, {
+        branch: activeBranch,
+        commit: false,
+        author: "Goblin Editor"
+      });
+    });
+  }
+
+  async function commitHead(allowEmpty = false) {
+    await runAction("commit", async () => {
+      await repo.commit({
+        branch: activeBranch,
+        message: message.trim().length === 0 ? "Checkpoint" : message,
+        author: "Goblin Editor",
+        allowEmpty
+      });
+    });
+  }
+
+  async function createTag() {
+    await runAction("tag", async () => {
+      await repo.tag(tagName.trim(), {
+        branch: activeBranch,
+        revision: "HEAD",
+        annotation: "Tag cree depuis la demo",
+        author: "Goblin Editor",
+        createRevisionIfDirty: true
+      });
+    });
+  }
+
+  async function checkout(branch: string) {
+    await runAction("checkout", async () => {
+      await repo.checkout(branch);
+      setActiveBranch(branch);
+    });
+  }
+
+  async function selectRevision(revision: RevisionSummary) {
+    await runAction("preview", async () => {
+      setSelectedRevision(revision);
+      setSelectedState(await repo.readRevision(revision.revision));
+    });
+  }
+
+  async function restoreRevision(revision: RevisionSummary) {
+    await runAction("restore", async () => {
+      await repo.restore(revision.revision, {
+        branch: activeBranch,
+        commit: false,
+        message: `Restore revision ${revision.revision}`,
+        author: "Goblin Editor"
+      });
+      setSelectedRevision(revision);
+      setSelectedState(await repo.readRevision(revision.revision));
+    });
+  }
+
+  async function createBranchFromSelectedRevision() {
+    if (selectedRevision === null) {
+      return;
+    }
+
+    await runAction("branch", async () => {
+      await repo.createBranch(branchName.trim(), {
+        from: selectedRevision.revision,
+        checkout: true,
+        author: "Goblin Editor"
+      });
+      setActiveBranch(branchName.trim());
+    });
+  }
+
+  return (
+    <main className="app-shell">
+      <section className="topbar">
+        <div>
+          <p className="eyebrow">Object VCS example</p>
+          <h1>{goblinTavernExample.name}</h1>
+        </div>
+        <span className={head?.status === "dirty" ? "status-pill dirty" : "status-pill clean"}>
+          {head === null ? "Repository not initialized" : `HEAD ${head.status}`}
+        </span>
+      </section>
+
+      <section className="toolbar">
+        <div>
+          <span>Repo</span>
+          <strong>{objectVcsRepoId}</strong>
+        </div>
+        <div>
+          <span>Branch</span>
+          <strong>{activeBranch}</strong>
+        </div>
+        <div>
+          <span>Revision</span>
+          <strong>{head?.headRevision ?? "-"}</strong>
+        </div>
+        <div>
+          <span>Hash</span>
+          <strong>{head?.stateHash.slice(0, 14) ?? "-"}</strong>
+        </div>
+      </section>
+
+      {error === undefined ? null : (
+        <section className="panel error-panel">{errorMessage(error)}</section>
+      )}
+
+      {state === null ? (
+        <section className="panel start-panel">
+          <h2>Repository</h2>
+          <p>Initialise la demo dans Firestore pour commencer.</p>
+          <button type="button" onClick={() => void initializeRepository()} disabled={busy !== null}>
+            Initialiser
+          </button>
+        </section>
+      ) : (
+        <>
+          <section className="dashboard-grid">
+            <TavernPanel
+              state={state}
+              onReputationChange={delta =>
+                void updateDirty(current => ({
+                  ...current,
+                  tavern: {
+                    ...current.tavern,
+                    reputation: clamp(current.tavern.reputation + delta, 0, 100)
+                  }
+                }))
+              }
+            />
+            <ChaosPanel
+              state={state}
+              onChaosChange={delta =>
+                void updateDirty(current => ({
+                  ...current,
+                  chaosSettings: {
+                    ...current.chaosSettings,
+                    chaosLevel: clamp(current.chaosSettings.chaosLevel + delta, 0, 10)
+                  }
+                }))
+              }
+              onThemeChange={theme =>
+                void updateDirty(current => ({
+                  ...current,
+                  chaosSettings: {
+                    ...current.chaosSettings,
+                    theme
+                  }
+                }))
+              }
+            />
+          </section>
+
+          <section className="content-grid">
+            <GoblinPanel
+              goblins={state.goblins}
+              onAdd={() => void addGoblin(updateDirty)}
+              onMood={id => void cycleGoblinMood(updateDirty, id)}
+              onDelete={id =>
+                void updateDirty(current => {
+                  const nextGoblins = Object.fromEntries(
+                    Object.entries(current.goblins).filter(([goblinId]) => goblinId !== id)
+                  ) as Record<string, Goblin>;
+                  return { ...current, goblins: nextGoblins };
+                })
+              }
+            />
+            <MenuPanel
+              menuItems={state.menuItems}
+              onAdd={() => void addMenuItem(updateDirty)}
+              onToggle={id =>
+                void updateDirty(current => ({
+                  ...current,
+                  menuItems: {
+                    ...current.menuItems,
+                    [id]: {
+                      ...current.menuItems[id],
+                      inStock: !current.menuItems[id]?.inStock
+                    } as MenuItem
+                  }
+                }))
+              }
+              onDelete={id =>
+                void updateDirty(current => {
+                  const nextMenu = Object.fromEntries(
+                    Object.entries(current.menuItems).filter(([itemId]) => itemId !== id)
+                  ) as Record<string, MenuItem>;
+                  return { ...current, menuItems: nextMenu };
+                })
+              }
+            />
+            <EventPanel
+              events={state.tavernEvents}
+              onAdd={() => void addEvent(updateDirty)}
+              onResolve={id =>
+                void updateDirty(current => ({
+                  ...current,
+                  tavernEvents: {
+                    ...current.tavernEvents,
+                    [id]: {
+                      ...current.tavernEvents[id],
+                      resolved: true
+                    } as TavernEvent
+                  }
+                }))
+              }
+            />
+          </section>
+
+          <section className="panel action-panel">
+            <h2>Versioning</h2>
+            <div className="form-row">
+              <label>
+                Message
+                <input value={message} onChange={event => setMessage(event.target.value)} />
+              </label>
+              <button type="button" onClick={() => void commitHead(false)} disabled={busy !== null}>
+                Commit
+              </button>
+              <button type="button" onClick={() => void commitHead(true)} disabled={busy !== null}>
+                Commit vide
+              </button>
+            </div>
+            <div className="form-row">
+              <label>
+                Tag
+                <input value={tagName} onChange={event => setTagName(event.target.value)} />
+              </label>
+              <button type="button" onClick={() => void createTag()} disabled={busy !== null || tagName.trim().length === 0}>
+                Creer tag
+              </button>
+              <span>{Array.from(taggedRevisionNames.entries()).map(([name, revision]) => `${name} -> #${revision}`).join(", ")}</span>
+            </div>
+          </section>
+
+          <section className="two-column">
+            <section className="panel">
+              <h2>Branches</h2>
+              <div className="branch-list">
+                {branches.map(branch => (
+                  <button
+                    key={branch.name}
+                    type="button"
+                    className={branch.name === activeBranch ? "selected" : ""}
+                    onClick={() => void checkout(branch.name)}
+                  >
+                    {branch.name}
+                  </button>
+                ))}
+              </div>
+              <div className="form-row">
+                <label>
+                  Nouvelle branche
+                  <input value={branchName} onChange={event => setBranchName(event.target.value)} />
+                </label>
+                <button
+                  type="button"
+                  disabled={selectedRevision === null || busy !== null || branchName.trim().length === 0}
+                  onClick={() => void createBranchFromSelectedRevision()}
+                >
+                  Depuis revision
+                </button>
+              </div>
+            </section>
+
+            <section className="panel">
+              <RevisionTimeline<TavernState>
+                branch={activeBranch}
+                revisions={revisions}
+                tags={tags}
+                head={head}
+                loading={busy === "preview" || busy === "restore"}
+                error={undefined}
+                onSelectRevision={selectRevision}
+                onRestoreRevision={restoreRevision}
+              />
+            </section>
+          </section>
+
+          <RevisionPreview revision={selectedRevision} state={selectedState} />
+        </>
+      )}
+    </main>
+  );
+}
+
+function TavernPanel(props: {
+  readonly state: TavernState;
+  readonly onReputationChange: (delta: number) => void;
+}) {
+  return (
+    <section className="panel">
+      <h2>{props.state.tavern.name}</h2>
+      <p>{props.state.tavern.motto}</p>
+      <div className="metric">
+        <span>Reputation</span>
+        <strong>{props.state.tavern.reputation}</strong>
+      </div>
+      <div className="button-row">
+        <button type="button" onClick={() => props.onReputationChange(-3)}>
+          -3
+        </button>
+        <button type="button" onClick={() => props.onReputationChange(5)}>
+          +5
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ChaosPanel(props: {
+  readonly state: TavernState;
+  readonly onChaosChange: (delta: number) => void;
+  readonly onThemeChange: (theme: TavernState["chaosSettings"]["theme"]) => void;
+}) {
+  return (
+    <section className="panel">
+      <h2>Chaos</h2>
+      <div className="metric">
+        <span>Niveau</span>
+        <strong>{props.state.chaosSettings.chaosLevel}/10</strong>
+      </div>
+      <div className="button-row">
+        <button type="button" onClick={() => props.onChaosChange(-1)}>
+          -
+        </button>
+        <button type="button" onClick={() => props.onChaosChange(1)}>
+          +
+        </button>
+      </div>
+      <select
+        value={props.state.chaosSettings.theme}
+        onChange={event =>
+          props.onThemeChange(event.target.value as TavernState["chaosSettings"]["theme"])
+        }
+      >
+        <option value="sunny">sunny</option>
+        <option value="dungeon">dungeon</option>
+        <option value="lava">lava</option>
+      </select>
+    </section>
+  );
+}
+
+function GoblinPanel(props: {
+  readonly goblins: Readonly<Record<string, Goblin>>;
+  readonly onAdd: () => void;
+  readonly onMood: (id: string) => void;
+  readonly onDelete: (id: string) => void;
+}) {
+  return (
+    <section className="panel list-panel">
+      <HeaderWithAction title="Goblins" action="Ajouter" onAction={props.onAdd} />
+      {Object.values(props.goblins).map(goblin => (
+        <article key={goblin.id} className="list-item">
+          <strong>{goblin.name}</strong>
+          <span>{goblin.role} · {goblin.mood} · energie {goblin.energy}</span>
+          <span>{goblin.favoriteSnack}</span>
+          <div className="button-row">
+            <button type="button" onClick={() => props.onMood(goblin.id)}>
+              Humeur
+            </button>
+            <button type="button" onClick={() => props.onDelete(goblin.id)}>
+              Retirer
+            </button>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function MenuPanel(props: {
+  readonly menuItems: Readonly<Record<string, MenuItem>>;
+  readonly onAdd: () => void;
+  readonly onToggle: (id: string) => void;
+  readonly onDelete: (id: string) => void;
+}) {
+  return (
+    <section className="panel list-panel">
+      <HeaderWithAction title="Menu" action="Ajouter" onAction={props.onAdd} />
+      {Object.values(props.menuItems).map(item => (
+        <article key={item.id} className="list-item">
+          <strong>{item.name}</strong>
+          <span>{item.pricePebbles} cailloux · etrangete {item.weirdness}/5</span>
+          <span>{item.inStock ? "en stock" : "rupture"}</span>
+          <div className="button-row">
+            <button type="button" onClick={() => props.onToggle(item.id)}>
+              Stock
+            </button>
+            <button type="button" onClick={() => props.onDelete(item.id)}>
+              Retirer
+            </button>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function EventPanel(props: {
+  readonly events: Readonly<Record<string, TavernEvent>>;
+  readonly onAdd: () => void;
+  readonly onResolve: (id: string) => void;
+}) {
+  return (
+    <section className="panel list-panel">
+      <HeaderWithAction title="Evenements" action="Ajouter" onAction={props.onAdd} />
+      {Object.values(props.events).map(event => (
+        <article key={event.id} className="list-item">
+          <strong>{event.title}</strong>
+          <span>{event.severity} · {event.resolved ? "resolu" : "ouvert"}</span>
+          <div className="button-row">
+            <button type="button" onClick={() => props.onResolve(event.id)} disabled={event.resolved}>
+              Resoudre
+            </button>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function HeaderWithAction(props: {
+  readonly title: string;
+  readonly action: string;
+  readonly onAction: () => void;
+}) {
+  return (
+    <div className="panel-header">
+      <h2>{props.title}</h2>
+      <button type="button" onClick={props.onAction}>
+        {props.action}
+      </button>
+    </div>
+  );
+}
+
+function RevisionPreview(props: {
+  readonly revision: RevisionSummary | null;
+  readonly state: TavernState | null;
+}) {
+  if (props.revision === null || props.state === null) {
+    return null;
+  }
+
+  return (
+    <section className="panel preview-panel">
+      <h2>Revision #{props.revision.revision}</h2>
+      <pre>{JSON.stringify(props.state, null, 2)}</pre>
+    </section>
+  );
+}
+
+async function addGoblin(
+  updateDirty: (updater: (current: TavernState) => TavernState) => Promise<void>
+) {
+  const id = `goblin_${Date.now().toString(36)}`;
+  const name = goblinNames[Math.floor(Math.random() * goblinNames.length)] ?? "Nok";
+  const snack = snacks[Math.floor(Math.random() * snacks.length)] ?? "soupe froide";
+
+  await updateDirty(current => ({
+    ...current,
+    goblins: {
+      ...current.goblins,
+      [id]: {
+        id,
+        name,
+        role: "intern",
+        mood: "suspicious",
+        favoriteSnack: snack,
+        energy: 44
+      }
+    }
+  }));
+}
+
+async function cycleGoblinMood(
+  updateDirty: (updater: (current: TavernState) => TavernState) => Promise<void>,
+  id: string
+) {
+  const moods: readonly Goblin["mood"][] = ["grumpy", "hungry", "heroic", "suspicious"];
+
+  await updateDirty(current => {
+    const goblin = current.goblins[id];
+    if (goblin === undefined) {
+      return current;
+    }
+
+    const moodIndex = moods.indexOf(goblin.mood);
+    const nextMood = moods[(moodIndex + 1) % moods.length] ?? "grumpy";
+
+    return {
+      ...current,
+      goblins: {
+        ...current.goblins,
+        [id]: {
+          ...goblin,
+          mood: nextMood
+        }
+      }
+    };
+  });
+}
+
+async function addMenuItem(
+  updateDirty: (updater: (current: TavernState) => TavernState) => Promise<void>
+) {
+  const id = `menu_${Date.now().toString(36)}`;
+  await updateDirty(current => ({
+    ...current,
+    menuItems: {
+      ...current.menuItems,
+      [id]: {
+        id,
+        name: "Ragout experimental",
+        pricePebbles: 11,
+        weirdness: 4,
+        inStock: true
+      }
+    }
+  }));
+}
+
+async function addEvent(
+  updateDirty: (updater: (current: TavernState) => TavernState) => Promise<void>
+) {
+  const id = `event_${Date.now().toString(36)}`;
+  await updateDirty(current => ({
+    ...current,
+    tavernEvents: {
+      ...current.tavernEvents,
+      [id]: {
+        id,
+        title: "Un tonneau negocie son depart",
+        severity: "minor",
+        resolved: false
+      }
+    }
+  }));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

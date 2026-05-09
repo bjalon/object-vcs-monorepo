@@ -19,7 +19,8 @@
     "@bjalon/object-vcs-react": "file:../../packages/react",
     "firebase": "^11.1.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/react": "^19.0.2",

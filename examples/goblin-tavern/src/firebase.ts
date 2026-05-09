@@ -1,8 +1,10 @@
 import { initializeApp, type FirebaseApp, type FirebaseOptions } from "firebase/app";
+import { getFirestore, type Firestore } from "firebase/firestore";
 
 export interface FirebaseRuntimeStatus {
   readonly configured: boolean;
   readonly app: FirebaseApp | null;
+  readonly db: Firestore | null;
   readonly projectId: string | null;
   readonly missingVariables: readonly string[];
 }
@@ -58,15 +60,20 @@ export const firebaseRuntimeStatus: FirebaseRuntimeStatus =
     ? {
         configured: false,
         app: null,
+        db: null,
         projectId: configuredProjectId,
         missingVariables
       }
-    : {
+    : (() => {
+        const app = initializeApp(firebaseOptions);
+        return {
         configured: true,
-        app: initializeApp(firebaseOptions),
+        app,
+        db: getFirestore(app),
         projectId: configuredProjectId,
         missingVariables: []
-      };
+        };
+      })();
 
 export const objectVcsRepoId =
   env.VITE_OBJECT_VCS_REPO_ID ?? "goblin-tavern-demo";

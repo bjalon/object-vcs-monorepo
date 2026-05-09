@@ -13,6 +13,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
+    "dev:example": "npm --workspace @bjalon/object-vcs-example-goblin-tavern run dev",
     "deploy:firebase:rules": "cd examples/goblin-tavern && npm run firebase:rules:deploy"
   },
   "devDependencies": {
