@@ -5,14 +5,25 @@
   "description": "Goblin Tavern VCS example scaffold.",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"vite.config.ts\""
   },
   "dependencies": {
     "@bjalon/object-vcs-core": "file:../../packages/core",
     "@bjalon/object-vcs-firebase": "file:../../packages/firebase",
-    "@bjalon/object-vcs-react": "file:../../packages/react"
+    "@bjalon/object-vcs-react": "file:../../packages/react",
+    "firebase": "^11.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.21"
   }
 }

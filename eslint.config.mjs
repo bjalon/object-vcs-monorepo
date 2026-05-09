@@ -34,5 +34,21 @@ export default [
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/consistent-type-imports": "error"
     }
+  },
+  {
+    files: ["examples/goblin-tavern/src/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        document: "readonly"
+      }
+    }
+  },
+  {
+    files: ["examples/goblin-tavern/vite.config.ts"],
+    languageOptions: {
+      globals: {
+        process: "readonly"
+      }
+    }
   }
 ];
