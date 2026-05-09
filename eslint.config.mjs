@@ -5,6 +5,7 @@ import tsParser from "@typescript-eslint/parser";
 const typedPackageProjects = [
   "./packages/core/tsconfig.json",
   "./packages/firebase/tsconfig.json",
+  "./packages/http/tsconfig.json",
   "./packages/react/tsconfig.json",
   "./packages/vue/tsconfig.json",
   "./packages/vanilla/tsconfig.json",

@@ -8,6 +8,7 @@
     "paths": {
       "@bjalon/object-vcs-core": ["packages/core/src/index.ts"],
       "@bjalon/object-vcs-firebase": ["packages/firebase/src/index.ts"],
+      "@bjalon/object-vcs-http": ["packages/http/src/index.ts"],
       "@bjalon/object-vcs-react": ["packages/react/src/index.ts"],
       "@bjalon/object-vcs-vanilla": ["packages/vanilla/src/index.ts"],
       "@bjalon/object-vcs-vue": ["packages/vue/src/index.ts"]

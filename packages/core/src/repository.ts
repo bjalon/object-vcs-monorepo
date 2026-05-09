@@ -286,7 +286,10 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         : { author: updateOptions.author }),
       ...(updateOptions.expectedHeadHash === undefined
         ? {}
-        : { expectedHeadHash: updateOptions.expectedHeadHash })
+        : { expectedHeadHash: updateOptions.expectedHeadHash }),
+      ...(updateOptions.concurrency === undefined
+        ? {}
+        : { concurrency: updateOptions.concurrency })
     });
 
     return {

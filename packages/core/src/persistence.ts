@@ -1,6 +1,7 @@
 import type {
   BranchName,
   BranchRecord,
+  ConcurrencyMode,
   Head,
   RepositoryId,
   RevisionNumber,
@@ -78,6 +79,7 @@ export interface WriteHeadInput<TState> {
   readonly expectedHeadHash?: StateHash;
   readonly baseRevision?: RevisionNumber | null;
   readonly author?: string;
+  readonly concurrency?: ConcurrencyMode;
 }
 
 export interface WriteHeadResult<TState> {
