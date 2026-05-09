@@ -70,18 +70,16 @@ Le script racine entre dans `examples/goblin-tavern`, charge `VITE_FIREBASE_PROJ
 
 ## 3. URL et base path
 
-Le build Pages utilise `GITHUB_PAGES=true`, ce qui configure Vite avec :
+Le site est publie sur un sous-domaine dedie :
 
 ```txt
-/qastia-gitlight/
+https://gitlight.qastia.com/
 ```
 
-Si le repository GitHub est renomme, mettre a jour `repositoryName` dans `examples/goblin-tavern/vite.config.ts`.
-
-L'URL finale aura la forme :
+Le build Vite utilise donc `base: "/"`. Le fichier `examples/goblin-tavern/public/CNAME` est copie dans l'artefact Pages et contient :
 
 ```txt
-https://bjalon.github.io/qastia-gitlight/
+gitlight.qastia.com
 ```
 
 ## 4. Verification locale
