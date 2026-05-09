@@ -66,7 +66,7 @@ Pour deployer les rules depuis le poste local, renseigner `examples/goblin-taver
 npm run deploy:firebase:rules
 ```
 
-Le script charge `VITE_FIREBASE_PROJECT_ID` depuis `.env.local` et execute `firebase deploy --only firestore:rules`.
+Le script racine entre dans `examples/goblin-tavern`, charge `VITE_FIREBASE_PROJECT_ID` depuis `.env.local` et execute `firebase deploy --only firestore:rules`.
 
 ## 3. URL et base path
 
