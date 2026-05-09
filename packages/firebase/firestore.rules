@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function canReadRepo(repoId) {
+      return signedIn();
+    }
+
+    function canWriteRepo(repoId) {
+      return signedIn();
+    }
+
+    match /objectVcs/{repoId} {
+      allow read: if canReadRepo(repoId);
+      allow create, update: if canWriteRepo(repoId);
+      allow delete: if false;
+
+      match /branches/{branchId} {
+        allow read: if canReadRepo(repoId);
+        allow create, update: if canWriteRepo(repoId);
+        allow delete: if false;
+      }
+
+      match /heads/{branchId} {
+        allow read: if canReadRepo(repoId);
+        allow create, update: if canWriteRepo(repoId);
+        allow delete: if false;
+      }
+
+      match /revisions/{revisionId} {
+        allow read: if canReadRepo(repoId);
+        allow create: if canWriteRepo(repoId) && !exists(/databases/$(database)/documents/objectVcs/$(repoId)/revisions/$(revisionId));
+        allow update, delete: if false;
+      }
+
+      match /tags/{tagId} {
+        allow read: if canReadRepo(repoId);
+        allow create, update: if canWriteRepo(repoId);
+        allow delete: if false;
+      }
+
+      match /blobs/{blobId} {
+        allow read: if canReadRepo(repoId);
+        allow create: if canWriteRepo(repoId) && !exists(/databases/$(database)/documents/objectVcs/$(repoId)/blobs/$(blobId));
+        allow update, delete: if false;
+      }
+    }
+  }
+}

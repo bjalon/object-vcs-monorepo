@@ -10,12 +10,19 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "firestore.rules",
+    "FIRESTORE_RULES.md"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -b tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "eslint \"src/**/*.ts\""
+  },
+  "dependencies": {
+    "@bjalon/object-vcs-core": "file:../core"
   },
   "peerDependencies": {
     "firebase": ">=10"
