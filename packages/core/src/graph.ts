@@ -19,7 +19,7 @@ export type GraphEntry<TValue = unknown> =
 
 export type GraphEntries = Readonly<Record<string, GraphEntry>>;
 
-export interface ObjectVcsGraph<TEntries extends GraphEntries> {
+export interface ObjectVcsGraph<TEntries extends GraphEntries = GraphEntries> {
   readonly entries: TEntries;
   validateState(input: unknown): InferState<ObjectVcsGraph<TEntries>>;
   safeValidateState(input: unknown): ValidationResult<InferState<ObjectVcsGraph<TEntries>>>;

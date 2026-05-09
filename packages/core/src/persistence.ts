@@ -44,6 +44,7 @@ export interface CreateRepoInput<TState> {
   readonly defaultBranch: BranchName;
   readonly storageMode: StorageMode;
   readonly initialState: TState;
+  readonly stateHash: StateHash;
   readonly commit: boolean;
   readonly message?: string;
   readonly author?: string;
@@ -56,6 +57,11 @@ export interface CreateRepoResult<TState> {
 }
 
 export interface GetBranchInput {
+  readonly repoId: RepositoryId;
+  readonly branchName: BranchName;
+}
+
+export interface GetHeadInput {
   readonly repoId: RepositoryId;
   readonly branchName: BranchName;
 }
@@ -177,6 +183,7 @@ export interface PersistenceAdapter<TState> {
   getRepo(input: GetRepoInput): Promise<RepoRecord | null>;
   createRepo(input: CreateRepoInput<TState>): Promise<CreateRepoResult<TState>>;
   getBranch(input: GetBranchInput): Promise<BranchRecord | null>;
+  getHead(input: GetHeadInput): Promise<Head<TState> | null>;
   listBranches(input: ListBranchesInput): Promise<BranchRecord[]>;
   writeHead(input: WriteHeadInput<TState>): Promise<WriteHeadResult<TState>>;
   createRevision(
