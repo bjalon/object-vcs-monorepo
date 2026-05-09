@@ -8,11 +8,17 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./RevisionTimeline.vue": {
+      "default": "./src/RevisionTimeline.vue"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "src/RevisionTimeline.vue"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -b tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "eslint \"src/**/*.ts\""
@@ -20,12 +26,10 @@
   "dependencies": {
     "@bjalon/object-vcs-core": "file:../core"
   },
+  "devDependencies": {
+    "vue": "^3.5.0"
+  },
   "peerDependencies": {
     "vue": ">=3"
-  },
-  "peerDependenciesMeta": {
-    "vue": {
-      "optional": true
-    }
   }
 }
