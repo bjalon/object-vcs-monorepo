@@ -226,6 +226,7 @@ h2 {
 
 .button-row,
 .form-row,
+.storage-row,
 .branch-list,
 .panel-header {
   align-items: center;
@@ -248,6 +249,29 @@ h2 {
   color: #64748b;
   font-size: 0.9rem;
   overflow-wrap: anywhere;
+}
+
+.storage-row {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.storage-row div {
+  display: grid;
+  gap: 3px;
+  min-width: min(220px, 100%);
+}
+
+.storage-row span {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.storage-row strong {
+  color: #0f766e;
+  font-size: 1.15rem;
 }
 
 .list-panel {

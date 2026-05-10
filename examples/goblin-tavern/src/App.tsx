@@ -25,7 +25,17 @@ type BusyAction =
   | "branch"
   | "restore"
   | "checkout"
-  | "preview";
+  | "preview"
+  | "storage";
+
+interface StorageEstimate {
+  readonly totalBytes: number;
+  readonly headBytes: number;
+  readonly revisionsBytes: number;
+  readonly metadataBytes: number;
+  readonly revisionCount: number;
+  readonly calculatedAt: string;
+}
 
 const goblinNames = ["Mog", "Blim", "Traka", "Nurz", "Pifang"] as const;
 const snacks = [
@@ -43,7 +53,8 @@ const busyLabels: Record<BusyAction, string> = {
   branch: "Creation de branche",
   restore: "Restauration de revision",
   checkout: "Changement de branche",
-  preview: "Lecture de revision"
+  preview: "Lecture de revision",
+  storage: "Calcul du stockage"
 };
 
 export function App() {
@@ -107,6 +118,8 @@ function GoblinTavernApp() {
   const [tagName, setTagName] = useState("service-du-soir");
   const [branchName, setBranchName] = useState("univers-sans-soupe");
   const [fullCheckEnabled, setFullCheckEnabled] = useState(false);
+  const [storageEstimate, setStorageEstimate] =
+    useState<StorageEstimate | null>(null);
   const [busy, setBusy] = useState<BusyAction | null>(null);
   const [error, setError] = useState<unknown>(undefined);
 
@@ -268,6 +281,35 @@ function GoblinTavernApp() {
     });
   }
 
+  async function estimateStorage() {
+    await runAction("storage", async () => {
+      const currentHead = await repo.getHead({ branch: activeBranch });
+      const allRevisions = await repo.listRevisions();
+      const revisionStates = await Promise.all(
+        allRevisions.map(revision => repo.readRevision(revision.revision))
+      );
+      const headBytes = jsonByteSize(currentHead.state);
+      const revisionsBytes = revisionStates.reduce(
+        (sum, revisionState) => sum + jsonByteSize(revisionState),
+        0
+      );
+      const metadataBytes =
+        jsonByteSize(stripHeadState(currentHead)) +
+        jsonByteSize(allRevisions) +
+        jsonByteSize(tags) +
+        jsonByteSize(branches);
+
+      setStorageEstimate({
+        totalBytes: headBytes + revisionsBytes + metadataBytes,
+        headBytes,
+        revisionsBytes,
+        metadataBytes,
+        revisionCount: allRevisions.length,
+        calculatedAt: new Date().toISOString()
+      });
+    });
+  }
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -366,6 +408,24 @@ function GoblinTavernApp() {
                   ? "Chaque brouillon relit HEAD, revisions, tags et branches."
                   : "Chaque brouillon met seulement HEAD a jour localement."}
               </span>
+            </div>
+            <div className="storage-row">
+              <div>
+                <span>Stockage estime</span>
+                <strong>{storageEstimate === null ? "-" : formatBytes(storageEstimate.totalBytes)}</strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => void estimateStorage()}
+                disabled={busy !== null}
+              >
+                Calculer
+              </button>
+              {storageEstimate === null ? null : (
+                <span title={storageTooltip(storageEstimate)}>
+                  {storageEstimate.revisionCount} revisions · {formatBytes(storageEstimate.revisionsBytes)} snapshots
+                </span>
+              )}
             </div>
             <div className="form-row">
               <label>
@@ -596,6 +656,47 @@ async function cycleGoblinMood(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function jsonByteSize(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function stripHeadState(head: Head<TavernState>): Omit<Head<TavernState>, "state"> {
+  return {
+    repoId: head.repoId,
+    branchName: head.branchName,
+    status: head.status,
+    headRevision: head.headRevision,
+    baseRevision: head.baseRevision,
+    stateHash: head.stateHash,
+    updatedAt: head.updatedAt,
+    ...(head.updatedBy === undefined ? {} : { updatedBy: head.updatedBy })
+  };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const kib = bytes / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(1)} KiB`;
+  }
+
+  return `${(kib / 1024).toFixed(2)} MiB`;
+}
+
+function storageTooltip(estimate: StorageEstimate): string {
+  return [
+    `Total: ${formatBytes(estimate.totalBytes)}`,
+    `HEAD state: ${formatBytes(estimate.headBytes)}`,
+    `Revision snapshots: ${formatBytes(estimate.revisionsBytes)}`,
+    `Metadata: ${formatBytes(estimate.metadataBytes)}`,
+    `Revisions: ${estimate.revisionCount}`,
+    `Calculated at: ${estimate.calculatedAt}`
+  ].join("\n");
 }
 
 function errorMessage(error: unknown): string {
