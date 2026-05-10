@@ -35,6 +35,8 @@ export class ConcurrencyConflictError extends ObjectVcsError {}
 export class PersistenceError extends ObjectVcsError {}
 export class SchemaCompatibilityError extends ObjectVcsError {}
 export class GarbageCollectionPlanStaleError extends ObjectVcsError {}
+export class GarbageCollectionUnsafeError extends ObjectVcsError {}
+export class GarbageCollectionPlanNotFoundError extends ObjectVcsError {}
 
 export interface MigrationErrorDetails {
   readonly from: string;

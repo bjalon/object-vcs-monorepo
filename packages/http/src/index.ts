@@ -3,10 +3,14 @@ import {
   BranchNotFoundError,
   ConcurrencyConflictError,
   DirtyHeadError,
+  GarbageCollectionPlanNotFoundError,
+  GarbageCollectionPlanStaleError,
+  GarbageCollectionUnsafeError,
   PersistenceError,
   RepositoryAlreadyExistsError,
   RepositoryNotFoundError,
   RevisionNotFoundError,
+  SchemaCompatibilityError,
   TagAlreadyExistsError,
   TagNotFoundError,
   TagRevisionMismatchError,
@@ -20,6 +24,9 @@ import {
   type CreateTagInput,
   type DeleteTagInput,
   type DeleteTagResult,
+  type EstimateStorageOptions,
+  type GarbageCollectionPlan,
+  type GarbageCollectionRunResult,
   type GetBranchInput,
   type GetHeadInput,
   type GetRepoInput,
@@ -29,10 +36,14 @@ import {
   type ListRevisionsInput,
   type ListTagsInput,
   type PersistenceAdapter,
+  type PersistenceEstimateStorageInput,
+  type PersistencePlanGarbageCollectionInput,
+  type PersistenceRunGarbageCollectionInput,
   type ReadRevisionInput,
   type ReadRevisionStateInput,
   type RepoRecord,
   type ResetBranchInput,
+  type RepositoryStorageEstimate,
   type RestoreRevisionInput,
   type RevisionRecord,
   type RevisionSummary,
@@ -244,6 +255,43 @@ export interface CreateTagResponse<TState = unknown> {
   readonly head?: HeadDto<TState>;
 }
 
+export type PlanGarbageCollectionRequest = Omit<
+  PersistencePlanGarbageCollectionInput,
+  "repoId"
+>;
+
+export type PlanGarbageCollectionResponse = GarbageCollectionPlan;
+
+export interface RunGarbageCollectionRequest {
+  readonly plan: GarbageCollectionPlan;
+  readonly dryRun?: boolean;
+  readonly recomputeBeforeRun?: true;
+  readonly allowStalePlan?: false;
+  readonly author?: string;
+}
+
+export type RunGarbageCollectionResponse = GarbageCollectionRunResult;
+
+export type StorageEstimateRequest = EstimateStorageOptions;
+
+export type StorageEstimateResponse = RepositoryStorageEstimate;
+
+export type SchemaIdentityResponse = GraphIdentity;
+
+export interface HttpPersistenceAdapter<TState>
+  extends PersistenceAdapter<TState> {
+  planGarbageCollection(
+    input: PersistencePlanGarbageCollectionInput
+  ): Promise<GarbageCollectionPlan>;
+  runGarbageCollection(
+    input: PersistenceRunGarbageCollectionInput
+  ): Promise<GarbageCollectionRunResult>;
+  estimateStorage(
+    input: PersistenceEstimateStorageInput
+  ): Promise<RepositoryStorageEstimate>;
+  getSchemaIdentity(input: GetRepoInput): Promise<GraphIdentity>;
+}
+
 interface ResolvedHttpPersistenceOptions {
   readonly baseUrl: string;
   readonly apiVersion: string;
@@ -256,7 +304,7 @@ interface ResolvedHttpPersistenceOptions {
 
 export function httpPersistence<TState>(
   options: HttpPersistenceOptions
-): PersistenceAdapter<TState> {
+): HttpPersistenceAdapter<TState> {
   const resolvedOptions = resolveOptions(options);
   const client = createHttpClient(resolvedOptions);
 
@@ -486,6 +534,94 @@ export function httpPersistence<TState>(
       });
     },
 
+    async planGarbageCollection(
+      input: PersistencePlanGarbageCollectionInput
+    ): Promise<GarbageCollectionPlan> {
+      return client.request<
+        PlanGarbageCollectionResponse,
+        PlanGarbageCollectionRequest
+      >({
+        method: "POST",
+        path: `/repos/${encodePath(input.repoId)}/garbage-collection/plan`,
+        write: true,
+        body: {
+          ...(input.beforeRevision === undefined
+            ? {}
+            : { beforeRevision: input.beforeRevision }),
+          ...(input.keepTagged === undefined
+            ? {}
+            : { keepTagged: input.keepTagged }),
+          ...(input.keepBranchHeads === undefined
+            ? {}
+            : { keepBranchHeads: input.keepBranchHeads }),
+          ...(input.keepDirtyBaseRevisions === undefined
+            ? {}
+            : { keepDirtyBaseRevisions: input.keepDirtyBaseRevisions }),
+          ...(input.includeOrphanBlobs === undefined
+            ? {}
+            : { includeOrphanBlobs: input.includeOrphanBlobs }),
+          ...(input.protectRevisions === undefined
+            ? {}
+            : { protectRevisions: input.protectRevisions }),
+          ...(input.maxRevisionsToDelete === undefined
+            ? {}
+            : { maxRevisionsToDelete: input.maxRevisionsToDelete }),
+          ...(input.estimateStorage === undefined
+            ? {}
+            : { estimateStorage: input.estimateStorage })
+        }
+      });
+    },
+
+    async runGarbageCollection(
+      input: PersistenceRunGarbageCollectionInput
+    ): Promise<GarbageCollectionRunResult> {
+      return client.request<
+        RunGarbageCollectionResponse,
+        RunGarbageCollectionRequest
+      >({
+        method: "POST",
+        path: `/repos/${encodePath(input.repoId)}/garbage-collection/run`,
+        write: true,
+        body: {
+          plan: input.plan,
+          ...(input.dryRun === undefined ? {} : { dryRun: input.dryRun }),
+          ...(input.recomputeBeforeRun === undefined
+            ? {}
+            : { recomputeBeforeRun: input.recomputeBeforeRun }),
+          ...(input.allowStalePlan === undefined
+            ? {}
+            : { allowStalePlan: input.allowStalePlan }),
+          ...(input.author === undefined ? {} : { author: input.author })
+        }
+      });
+    },
+
+    async estimateStorage(
+      input: PersistenceEstimateStorageInput
+    ): Promise<RepositoryStorageEstimate> {
+      const response = await client.request<StorageEstimateResponse>({
+        method: "GET",
+        path: `/repos/${encodePath(input.repoId)}/storage-estimate`,
+        query: booleanQuery({
+          includeRevisions: input.includeRevisions,
+          includeBlobs: input.includeBlobs,
+          includeHeads: input.includeHeads,
+          includeBranches: input.includeBranches,
+          includeTags: input.includeTags,
+          adapterSpecific: input.adapterSpecific
+        })
+      });
+      return response;
+    },
+
+    async getSchemaIdentity(input: GetRepoInput): Promise<GraphIdentity> {
+      return client.request<SchemaIdentityResponse>({
+        method: "GET",
+        path: `/repos/${encodePath(input.repoId)}/schema`
+      });
+    },
+
     async createBranch(input: CreateBranchInput): Promise<BranchRecord> {
       const response = await client.request<CreateBranchResponse<TState>, CreateBranchRequest>({
         method: "POST",
@@ -695,6 +831,14 @@ async function httpErrorToObjectVcsError(
       return new TagNotFoundError(message);
     case "TAG_REVISION_MISMATCH":
       return new TagRevisionMismatchError(message);
+    case "GARBAGE_COLLECTION_PLAN_STALE":
+      return new GarbageCollectionPlanStaleError(message);
+    case "GARBAGE_COLLECTION_UNSAFE":
+      return new GarbageCollectionUnsafeError(message);
+    case "GARBAGE_COLLECTION_PLAN_NOT_FOUND":
+      return new GarbageCollectionPlanNotFoundError(message);
+    case "SCHEMA_COMPATIBILITY_ERROR":
+      return new SchemaCompatibilityError(message);
     case "DIRTY_HEAD":
       return new DirtyHeadError(message);
     case "CONCURRENCY_CONFLICT":
@@ -750,6 +894,9 @@ function fallbackHttpError(
   message: string
 ): Error {
   if (status === 404) {
+    if (code.includes("GARBAGE_COLLECTION")) {
+      return new GarbageCollectionPlanNotFoundError(message);
+    }
     if (code.includes("TAG")) {
       return new TagNotFoundError(message);
     }
@@ -768,10 +915,18 @@ function fallbackHttpError(
         ? new TagRevisionMismatchError(message)
         : new TagAlreadyExistsError(message);
     }
+    if (code.includes("GARBAGE_COLLECTION")) {
+      return code.includes("STALE")
+        ? new GarbageCollectionPlanStaleError(message)
+        : new GarbageCollectionUnsafeError(message);
+    }
     return new ConcurrencyConflictError(message);
   }
 
   if (status === 422) {
+    if (code.includes("SCHEMA")) {
+      return new SchemaCompatibilityError(message);
+    }
     return new ValidationError(message, [{ path: [], message }]);
   }
 
@@ -784,6 +939,18 @@ function trimSlashes(value: string): string {
 
 function encodePath(value: string): string {
   return encodeURIComponent(value);
+}
+
+function booleanQuery(
+  input: Readonly<Record<string, boolean | undefined>>
+): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined) {
+      output[key] = String(value);
+    }
+  }
+  return output;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

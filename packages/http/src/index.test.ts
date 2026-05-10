@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ConcurrencyConflictError,
+  GarbageCollectionPlanNotFoundError,
+  GarbageCollectionPlanStaleError,
+  GarbageCollectionUnsafeError,
   PersistenceError,
+  type GarbageCollectionPlan,
   RepositoryAlreadyExistsError,
+  type RepositoryStorageEstimate,
+  SchemaCompatibilityError,
   TagNotFoundError,
   TagRevisionMismatchError
 } from "@bjalon/object-vcs-core";
@@ -24,6 +30,10 @@ import {
   type ListBranchesResponse,
   type ListRevisionsResponse,
   type ListTagsResponse,
+  type RunGarbageCollectionResponse,
+  type SchemaIdentityResponse,
+  type StorageEstimateResponse,
+  type PlanGarbageCollectionResponse,
   type ResetBranchResponse,
   type RestoreResponse,
   type WriteHeadRequest,
@@ -105,6 +115,58 @@ const tag = {
   createdAt: "2026-01-01T00:00:00.000Z"
 };
 
+const storageEstimate: RepositoryStorageEstimate = {
+  repoId: "repo 1",
+  rawStateBytes: 10,
+  objectVcsMetadataBytes: 20,
+  blobBytes: 30,
+  estimatedBackendBytes: 60,
+  documentCount: 4,
+  revisionCount: 1,
+  blobCount: 1,
+  branchCount: 1,
+  tagCount: 1,
+  notes: ["approximate"]
+};
+
+const garbageCollectionPlan: GarbageCollectionPlan = {
+  planId: "gc-1",
+  repoId: "repo 1",
+  strategy: "unreachable-snapshots-v1",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  options: {
+    beforeRevision: 2,
+    keepTagged: true,
+    keepBranchHeads: true,
+    keepDirtyBaseRevisions: true,
+    includeOrphanBlobs: true,
+    protectRevisions: [],
+    maxRevisionsToDelete: null,
+    estimateStorage: true
+  },
+  protectedRevisions: [],
+  deletableRevisions: [],
+  blockedRevisions: [],
+  orphanBlobs: [],
+  estimatedFreedStorage: {
+    bytes: 0,
+    documents: 0,
+    blobs: 0
+  },
+  refsSnapshot: {
+    tags: [],
+    branches: [],
+    latestRevision: 1
+  },
+  refsSnapshotHash: "sha256:refs"
+};
+
+const schemaIdentity = {
+  graphVersion: "test",
+  schemaFingerprint: "manual:test",
+  schemaFingerprintAlgorithm: "manual" as const
+};
+
 describe("@bjalon/object-vcs-http", () => {
   it("exports the package marker", () => {
     expect(objectVcsHttpPackage).toBe("@bjalon/object-vcs-http");
@@ -139,6 +201,25 @@ describe("@bjalon/object-vcs-http", () => {
         name: "v1",
         previousRevision: 1
       }),
+      jsonResponse<PlanGarbageCollectionResponse>(200, garbageCollectionPlan),
+      jsonResponse<RunGarbageCollectionResponse>(200, {
+        planId: "gc-1",
+        repoId: "repo 1",
+        dryRun: true,
+        deletedRevisions: [],
+        deletedBlobs: [],
+        skippedRevisions: [],
+        skippedBlobs: [],
+        freedStorageEstimate: {
+          bytes: 0,
+          documents: 0,
+          blobs: 0
+        },
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:00.000Z"
+      }),
+      jsonResponse<StorageEstimateResponse>(200, storageEstimate),
+      jsonResponse<SchemaIdentityResponse>(200, schemaIdentity),
       jsonResponse<CreateBranchResponse<TestState>>(201, { branch }),
       jsonResponse<RestoreResponse<TestState>>(200, { head, revision }),
       jsonResponse<ResetBranchResponse<TestState>>(200, { branch, head })
@@ -198,6 +279,26 @@ describe("@bjalon/object-vcs-http", () => {
       name: "v1",
       expectedRevision: 1
     });
+    await adapter.planGarbageCollection({
+      repoId: "repo 1",
+      beforeRevision: 2,
+      includeOrphanBlobs: true,
+      protectRevisions: [],
+      estimateStorage: true
+    });
+    await adapter.runGarbageCollection({
+      repoId: "repo 1",
+      plan: garbageCollectionPlan,
+      dryRun: true,
+      recomputeBeforeRun: true,
+      allowStalePlan: false
+    });
+    await adapter.estimateStorage({
+      repoId: "repo 1",
+      includeRevisions: true,
+      includeBlobs: false
+    });
+    await adapter.getSchemaIdentity({ repoId: "repo 1" });
     await adapter.createBranch({
       repoId: "repo 1",
       name: "feature/a",
@@ -231,6 +332,10 @@ describe("@bjalon/object-vcs-http", () => {
       "https://api.example.com/object-vcs/v1/repos/repo%201/tags",
       "https://api.example.com/object-vcs/v1/repos/repo%201/tags",
       "https://api.example.com/object-vcs/v1/repos/repo%201/tags/v1?missing=throw&expectedRevision=1",
+      "https://api.example.com/object-vcs/v1/repos/repo%201/garbage-collection/plan",
+      "https://api.example.com/object-vcs/v1/repos/repo%201/garbage-collection/run",
+      "https://api.example.com/object-vcs/v1/repos/repo%201/storage-estimate?includeRevisions=true&includeBlobs=false",
+      "https://api.example.com/object-vcs/v1/repos/repo%201/schema",
       "https://api.example.com/object-vcs/v1/repos/repo%201/branches",
       "https://api.example.com/object-vcs/v1/repos/repo%201/branches/main/restore",
       "https://api.example.com/object-vcs/v1/repos/repo%201/branches/main/reset"
@@ -247,6 +352,10 @@ describe("@bjalon/object-vcs-http", () => {
       "POST",
       "GET",
       "DELETE",
+      "POST",
+      "POST",
+      "GET",
+      "GET",
       "POST",
       "POST",
       "POST"
@@ -306,6 +415,30 @@ describe("@bjalon/object-vcs-http", () => {
           code: "TAG_REVISION_MISMATCH",
           message: "Tag changed."
         }
+      }),
+      jsonResponse(409, {
+        error: {
+          code: "GARBAGE_COLLECTION_PLAN_STALE",
+          message: "Plan stale."
+        }
+      }),
+      jsonResponse(409, {
+        error: {
+          code: "GARBAGE_COLLECTION_UNSAFE",
+          message: "Unsafe."
+        }
+      }),
+      jsonResponse(404, {
+        error: {
+          code: "GARBAGE_COLLECTION_PLAN_NOT_FOUND",
+          message: "Plan missing."
+        }
+      }),
+      jsonResponse(422, {
+        error: {
+          code: "SCHEMA_COMPATIBILITY_ERROR",
+          message: "Schema mismatch."
+        }
       })
     ]);
     const adapter = httpPersistence<TestState>({
@@ -348,6 +481,27 @@ describe("@bjalon/object-vcs-http", () => {
         expectedRevision: 2
       })
     ).rejects.toBeInstanceOf(TagRevisionMismatchError);
+    await expect(
+      adapter.runGarbageCollection({
+        repoId: "repo 1",
+        plan: garbageCollectionPlan
+      })
+    ).rejects.toBeInstanceOf(GarbageCollectionPlanStaleError);
+    await expect(
+      adapter.runGarbageCollection({
+        repoId: "repo 1",
+        plan: garbageCollectionPlan
+      })
+    ).rejects.toBeInstanceOf(GarbageCollectionUnsafeError);
+    await expect(
+      adapter.runGarbageCollection({
+        repoId: "repo 1",
+        plan: garbageCollectionPlan
+      })
+    ).rejects.toBeInstanceOf(GarbageCollectionPlanNotFoundError);
+    await expect(
+      adapter.getSchemaIdentity({ repoId: "repo 1" })
+    ).rejects.toBeInstanceOf(SchemaCompatibilityError);
   });
 
   it("reports unsupported branch patching explicitly", async () => {

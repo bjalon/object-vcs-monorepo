@@ -285,6 +285,29 @@ export interface GarbageCollectionRunResult {
   readonly completedAt: string;
 }
 
+export interface EstimateStorageOptions {
+  readonly includeRevisions?: boolean;
+  readonly includeBlobs?: boolean;
+  readonly includeHeads?: boolean;
+  readonly includeBranches?: boolean;
+  readonly includeTags?: boolean;
+  readonly adapterSpecific?: boolean;
+}
+
+export interface RepositoryStorageEstimate {
+  readonly repoId: RepositoryId;
+  readonly rawStateBytes: number;
+  readonly objectVcsMetadataBytes: number;
+  readonly blobBytes: number;
+  readonly estimatedBackendBytes: number | null;
+  readonly documentCount: number;
+  readonly revisionCount: number;
+  readonly blobCount: number;
+  readonly branchCount: number;
+  readonly tagCount: number;
+  readonly notes: readonly string[];
+}
+
 export interface PersistencePlanGarbageCollectionInput
   extends PlanGarbageCollectionOptions {
   readonly repoId: RepositoryId;
@@ -294,6 +317,10 @@ export interface PersistenceRunGarbageCollectionInput
   extends RunGarbageCollectionOptions {
   readonly repoId: RepositoryId;
   readonly plan: GarbageCollectionPlan;
+}
+
+export interface PersistenceEstimateStorageInput extends EstimateStorageOptions {
+  readonly repoId: RepositoryId;
 }
 
 export interface CreateBranchInput {
@@ -370,6 +397,9 @@ export interface PersistenceAdapter<TState> {
   runGarbageCollection?(
     input: PersistenceRunGarbageCollectionInput
   ): Promise<GarbageCollectionRunResult>;
+  estimateStorage?(
+    input: PersistenceEstimateStorageInput
+  ): Promise<RepositoryStorageEstimate>;
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
   updateBranch(input: UpdateBranchInput): Promise<BranchRecord>;
   restoreRevision(
