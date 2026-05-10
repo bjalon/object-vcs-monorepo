@@ -597,7 +597,10 @@ function RevisionPreview(props: {
 
   return (
     <section className="panel preview-panel">
-      <h2>Revision #{props.revision.revision}</h2>
+      <div className="panel-header">
+        <h2>Revision #{props.revision.revision}</h2>
+        <span className="size-pill">{formatBytes(jsonByteSize(props.state))}</span>
+      </div>
       <pre>{JSON.stringify(props.state, null, 2)}</pre>
     </section>
   );

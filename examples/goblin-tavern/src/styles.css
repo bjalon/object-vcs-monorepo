@@ -295,6 +295,16 @@ h2 {
   padding: 14px;
 }
 
+.size-pill {
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 999px;
+  color: #0f766e;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
 .code-list {
   display: grid;
   gap: 8px;
