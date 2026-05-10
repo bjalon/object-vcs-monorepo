@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -13,6 +16,8 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.test.*",
+    "!dist/tsconfig.tsbuildinfo",
     "firestore.rules",
     "FIRESTORE_RULES.md"
   ],
@@ -23,7 +28,7 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
-    "@bjalon/object-vcs-core": "file:../core"
+    "@bjalon/object-vcs-core": "^0.1.0"
   },
   "peerDependencies": {
     "firebase": ">=10"

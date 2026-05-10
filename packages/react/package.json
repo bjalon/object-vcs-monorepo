@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -12,7 +15,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/tsconfig.tsbuildinfo"
   ],
   "scripts": {
     "build": "tsc -b tsconfig.build.json",
@@ -21,7 +26,7 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
-    "@bjalon/object-vcs-core": "file:../core"
+    "@bjalon/object-vcs-core": "^0.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.2",

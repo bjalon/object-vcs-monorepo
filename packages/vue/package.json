@@ -5,6 +5,9 @@
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -16,6 +19,8 @@
   },
   "files": [
     "dist",
+    "!dist/**/*.test.*",
+    "!dist/tsconfig.tsbuildinfo",
     "src/RevisionTimeline.vue"
   ],
   "scripts": {
@@ -25,7 +30,7 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
-    "@bjalon/object-vcs-core": "file:../core"
+    "@bjalon/object-vcs-core": "^0.1.0"
   },
   "devDependencies": {
     "vue": "^3.5.0"
