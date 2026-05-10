@@ -2,6 +2,7 @@
   "name": "@bjalon/object-vcs-firebase",
   "version": "0.1.0",
   "description": "Firestore persistence adapter for Object VCS.",
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "exports": {

@@ -2,6 +2,7 @@
   "name": "@bjalon/object-vcs-core",
   "version": "0.1.0",
   "description": "Core types and primitives for Object VCS.",
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "exports": {

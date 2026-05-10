@@ -2,6 +2,7 @@
   "name": "object-vcs-monorepo",
   "version": "0.1.0",
   "description": "TypeScript monorepo for Object VCS.",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "workspaces": [

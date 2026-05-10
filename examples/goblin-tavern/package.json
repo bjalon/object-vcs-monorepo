@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Goblin Tavern VCS example scaffold.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

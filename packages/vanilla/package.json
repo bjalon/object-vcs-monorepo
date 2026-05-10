@@ -2,6 +2,7 @@
   "name": "@bjalon/object-vcs-vanilla",
   "version": "0.1.0",
   "description": "DOM bindings for Object VCS.",
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "exports": {

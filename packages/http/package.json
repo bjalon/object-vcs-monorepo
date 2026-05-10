@@ -2,6 +2,7 @@
   "name": "@bjalon/object-vcs-http",
   "version": "0.1.0",
   "description": "HTTP persistence adapter for Object VCS.",
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "exports": {
