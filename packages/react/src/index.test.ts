@@ -207,6 +207,13 @@ function createRepositoryMock(): ObjectVcsRepository<TestState> {
     async readRevision() {
       return state;
     },
+    async migrateHead() {
+      return {
+        head,
+        revision,
+        created: true
+      };
+    },
     async listRevisions() {
       return [revision];
     },

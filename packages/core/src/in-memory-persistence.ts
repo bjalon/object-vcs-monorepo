@@ -344,8 +344,8 @@ export function inMemoryPersistence<TState>(
         parentRevision,
         branchName: input.branchName,
         stateHash: input.stateHash,
-        schemaVersion: store.repo.schemaVersion,
-        graphVersion: store.repo.graphVersion,
+        schemaVersion: input.schemaVersion ?? store.repo.schemaVersion,
+        graphVersion: input.graphVersion ?? store.repo.graphVersion,
         ...(input.message === undefined ? {} : { message: input.message }),
         createdAt: timestamp,
         ...(input.author === undefined ? {} : { createdBy: input.author }),
@@ -360,6 +360,8 @@ export function inMemoryPersistence<TState>(
       });
       store.repo = {
         ...store.repo,
+        schemaVersion: input.schemaVersion ?? store.repo.schemaVersion,
+        graphVersion: input.graphVersion ?? store.repo.graphVersion,
         nextRevision: revisionNumber + 1,
         updatedAt: timestamp
       };

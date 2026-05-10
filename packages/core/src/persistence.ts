@@ -89,6 +89,8 @@ export interface WriteHeadResult<TState> {
 export interface CreateRevisionInput<TState> {
   readonly repoId: RepositoryId;
   readonly branchName: BranchName;
+  readonly schemaVersion?: number;
+  readonly graphVersion?: string;
   readonly state: TState;
   readonly stateHash: StateHash;
   readonly message?: string;

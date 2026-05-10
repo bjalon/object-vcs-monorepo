@@ -17,6 +17,7 @@ import type {
 } from "./graph.js";
 import { hashState } from "./hash.js";
 import { cloneJson } from "./json.js";
+import { migrateState, type StateMigration } from "./migrations.js";
 import type {
   BranchRecord,
   BranchName,
@@ -38,6 +39,7 @@ export interface CreateRepositoryOptions<TGraph extends ObjectVcsGraph> {
   readonly graph: TGraph;
   readonly schemaVersion: number;
   readonly graphVersion?: string;
+  readonly migrations?: readonly StateMigration[];
   readonly defaultBranch?: BranchName;
   readonly persistence: PersistenceAdapter<InferState<TGraph>>;
 }
@@ -57,6 +59,7 @@ export interface InitResult<TState> {
 
 export interface GetHeadOptions {
   readonly branch?: BranchName;
+  readonly migrateTo?: string;
 }
 
 export interface UpdateOptions {
@@ -89,7 +92,8 @@ export interface CommitResult<TState> {
 }
 
 export interface ReadRevisionOptions {
-  readonly migration?: "raw" | "latest" | "strict";
+  readonly migrateTo?: string;
+  readonly migration?: "latest" | "strict";
 }
 
 export interface ListRevisionsOptions {
@@ -129,6 +133,15 @@ export interface ResetBranchOptions {
   readonly expectedHeadHash?: StateHash;
 }
 
+export interface MigrateHeadOptions {
+  readonly branch?: BranchName;
+  readonly to?: string;
+  readonly message?: string;
+  readonly author?: string;
+  readonly allowEmpty?: boolean;
+  readonly expectedHeadHash?: StateHash;
+}
+
 export interface ObjectVcsRepository<TState> {
   init(options: InitOptions<TState>): Promise<InitResult<TState>>;
   getHead(options?: GetHeadOptions): Promise<Head<TState>>;
@@ -149,6 +162,7 @@ export interface ObjectVcsRepository<TState> {
     revision: RevisionNumber,
     options?: ReadRevisionOptions
   ): Promise<TState>;
+  migrateHead(options?: MigrateHeadOptions): Promise<CommitResult<TState>>;
   listRevisions(options?: ListRevisionsOptions): Promise<RevisionSummary[]>;
   watchRevisions(
     callback: (revisions: RevisionSummary[]) => void,
@@ -249,6 +263,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
   let activeBranch = options.defaultBranch ?? "main";
   const defaultBranch = options.defaultBranch ?? "main";
   const graphVersion = options.graphVersion ?? "1";
+  const migrations = options.migrations ?? [];
 
   function resolveBranch(branch: BranchName | undefined): BranchName {
     return branch ?? activeBranch;
@@ -258,11 +273,92 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     return options.graph.validateState(input) as TState;
   }
 
-  async function validateHead(head: Head<TState>): Promise<Head<TState>> {
-    const state = validateState(head.state);
+  function resolveMigrationTarget(
+    migrationOptions: ReadRevisionOptions | GetHeadOptions | undefined
+  ): string | null {
+    const requestedTarget = migrationOptions?.migrateTo;
+    if (requestedTarget !== undefined) {
+      return requestedTarget === "current" ? graphVersion : requestedTarget;
+    }
+
+    if (
+      "migration" in (migrationOptions ?? {}) &&
+      (migrationOptions as ReadRevisionOptions).migration === "latest"
+    ) {
+      return graphVersion;
+    }
+
+    return null;
+  }
+
+  function assertCurrentTarget(targetGraphVersion: string): void {
+    if (targetGraphVersion !== graphVersion) {
+      throw new ValidationError("Migration target does not match repository graph.", [
+        {
+          path: ["graphVersion"],
+          message: `Repository can validate "${graphVersion}", not "${targetGraphVersion}".`
+        }
+      ]);
+    }
+  }
+
+  async function readHeadGraphVersion(head: Head<TState>): Promise<string> {
+    const sourceRevision = head.headRevision ?? head.baseRevision;
+
+    if (sourceRevision !== null) {
+      const storedRevision = await options.persistence.readRevision({
+        repoId: options.repoId,
+        revision: sourceRevision
+      });
+      if (storedRevision === null) {
+        throw new RevisionNotFoundError(
+          `Revision "${sourceRevision}" was not found.`
+        );
+      }
+      return storedRevision.revision.graphVersion;
+    }
+
+    const repo = await options.persistence.getRepo({ repoId: options.repoId });
+    if (repo === null) {
+      throw new RevisionNotFoundError(
+        `Repository "${options.repoId}" was not found.`
+      );
+    }
+    return repo.graphVersion;
+  }
+
+  async function validateHead(
+    head: Head<TState>,
+    getHeadOptions?: GetHeadOptions
+  ): Promise<Head<TState>> {
+    let stateInput: unknown = head.state;
+    const rawStateHash = await hashState(stateInput);
+
+    if (rawStateHash !== head.stateHash) {
+      throw new ValidationError("HEAD state hash does not match its state.", [
+        {
+          path: ["stateHash"],
+          message: `Expected "${head.stateHash}", computed "${rawStateHash}".`
+        }
+      ]);
+    }
+
+    const targetGraphVersion = resolveMigrationTarget(getHeadOptions);
+    if (targetGraphVersion !== null) {
+      assertCurrentTarget(targetGraphVersion);
+      const sourceGraphVersion = await readHeadGraphVersion(head);
+      stateInput = migrateState({
+        state: stateInput,
+        from: sourceGraphVersion,
+        to: targetGraphVersion,
+        migrations
+      });
+    }
+
+    const state = validateState(stateInput);
     const stateHash = await hashState(state);
 
-    if (stateHash !== head.stateHash) {
+    if (targetGraphVersion === null && stateHash !== head.stateHash) {
       throw new ValidationError("HEAD state hash does not match its state.", [
         {
           path: ["stateHash"],
@@ -282,26 +378,49 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
 
     return {
       ...head,
+      stateHash,
       state
     };
   }
 
   async function validateStoredRevision(
     revision: RevisionSummary,
-    stateInput: unknown
+    stateInput: unknown,
+    readRevisionOptions?: ReadRevisionOptions
   ): Promise<TState> {
-    const state = validateState(stateInput);
-    const stateHash = await hashState(state);
+    let nextStateInput = stateInput;
+    const rawStateHash = await hashState(stateInput);
 
-    if (stateHash !== revision.stateHash) {
+    if (rawStateHash !== revision.stateHash) {
       throw new ValidationError("Revision state hash does not match its state.", [
         {
           path: ["stateHash"],
-          message: `Expected "${revision.stateHash}", computed "${stateHash}".`
+          message: `Expected "${revision.stateHash}", computed "${rawStateHash}".`
         }
       ]);
     }
 
+    const targetGraphVersion = resolveMigrationTarget(readRevisionOptions);
+    if (targetGraphVersion === null && revision.graphVersion !== graphVersion) {
+      throw new ValidationError("Revision graph version does not match repository graph.", [
+        {
+          path: ["graphVersion"],
+          message: `Read revision "${revision.revision}" with migrateTo: "current" or provide migrations from "${revision.graphVersion}" to "${graphVersion}".`
+        }
+      ]);
+    }
+
+    if (targetGraphVersion !== null) {
+      assertCurrentTarget(targetGraphVersion);
+      nextStateInput = migrateState({
+        state: stateInput,
+        from: revision.graphVersion,
+        to: targetGraphVersion,
+        migrations
+      });
+    }
+
+    const state = validateState(nextStateInput);
     return state;
   }
 
@@ -317,6 +436,8 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       const result = await options.persistence.createRevision({
         repoId: options.repoId,
         branchName,
+        schemaVersion: options.schemaVersion,
+        graphVersion,
         state,
         stateHash,
         ...(updateOptions.message === undefined
@@ -416,7 +537,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         );
       }
 
-      return validateHead(head);
+      return validateHead(head, getHeadOptions);
     },
 
     watchHead(
@@ -434,7 +555,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
           branchName
         },
         head => {
-          void validateHead(head).then(callback);
+          void validateHead(head, watchOptions).then(callback);
         }
       );
     },
@@ -479,6 +600,8 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       const result = await options.persistence.createRevision({
         repoId: options.repoId,
         branchName,
+        schemaVersion: options.schemaVersion,
+        graphVersion,
         state: head.state,
         stateHash: head.stateHash,
         ...(commitOptions.message === undefined
@@ -517,9 +640,57 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       return cloneJson(
         await validateStoredRevision(
           storedRevision.revision,
-          storedRevision.state
+          storedRevision.state,
+          readRevisionOptions
         )
       );
+    },
+
+    async migrateHead(
+      migrateOptions: MigrateHeadOptions = {}
+    ): Promise<CommitResult<TState>> {
+      const branchName = resolveBranch(migrateOptions.branch);
+      const rawHead = await options.persistence.getHead({
+        repoId: options.repoId,
+        branchName
+      });
+
+      if (rawHead === null) {
+        throw new BranchNotFoundError(
+          `HEAD for branch "${branchName}" was not found.`
+        );
+      }
+
+      const sourceGraphVersion = await readHeadGraphVersion(rawHead);
+      const targetGraphVersion = migrateOptions.to ?? graphVersion;
+      assertCurrentTarget(targetGraphVersion);
+      const migratedHead = await validateHead(rawHead, {
+        branch: branchName,
+        migrateTo: targetGraphVersion
+      });
+      const result = await options.persistence.createRevision({
+        repoId: options.repoId,
+        branchName,
+        schemaVersion: options.schemaVersion,
+        graphVersion: targetGraphVersion,
+        state: migratedHead.state,
+        stateHash: migratedHead.stateHash,
+        message:
+          migrateOptions.message ??
+          `Migrate graph ${sourceGraphVersion} -> ${targetGraphVersion}`,
+        ...(migrateOptions.author === undefined
+          ? {}
+          : { author: migrateOptions.author }),
+        allowEmpty:
+          migrateOptions.allowEmpty ?? sourceGraphVersion !== targetGraphVersion,
+        expectedHeadHash: migrateOptions.expectedHeadHash ?? rawHead.stateHash
+      });
+
+      return {
+        head: result.head,
+        revision: result.revision,
+        created: result.created
+      };
     },
 
     async listRevisions(

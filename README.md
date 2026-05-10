@@ -106,6 +106,7 @@ export const repo = createRepository({
   repoId: "goblin-tavern-demo",
   graph,
   schemaVersion: 1,
+  graphVersion: "goblin-tavern-v1",
   defaultBranch: "main",
   persistence: firebasePersistence({
     db,
@@ -113,6 +114,53 @@ export const repo = createRepository({
   }),
 });
 ```
+
+## Migrations de modèle
+
+Chaque révision porte la `graphVersion` utilisée au moment du commit. Quand le
+graph change de manière incompatible, fournissez une migration explicite :
+
+```ts
+export const repo = createRepository({
+  repoId: "goblin-tavern-demo",
+  graph: graphV2,
+  schemaVersion: 2,
+  graphVersion: "goblin-tavern-v2",
+  migrations: [
+    {
+      from: "goblin-tavern-v1",
+      to: "goblin-tavern-v2",
+      migrate: state => {
+        const old = graphV1.validateState(state);
+        return {
+          tavern: old.tavern,
+          goblins: old.goblins,
+        };
+      },
+    },
+  ],
+  persistence,
+});
+```
+
+Lecture migrée sans modifier l'historique :
+
+```ts
+const state = await repo.readRevision(1, { migrateTo: "current" });
+const head = await repo.getHead({ migrateTo: "current" });
+```
+
+Migration du `HEAD` vers la version courante, avec création d'une nouvelle
+révision :
+
+```ts
+await repo.migrateHead({
+  message: "Migration vers goblin-tavern-v2",
+});
+```
+
+Les anciennes révisions restent immuables. La migration crée une nouvelle
+révision dont `graphVersion` correspond au graph cible.
 
 Initialisation :
 

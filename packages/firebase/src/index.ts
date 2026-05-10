@@ -410,6 +410,8 @@ export function firebasePersistence<TState>(
               ).stateHash;
         const revision = createRevisionRecord({
           repo,
+          schemaVersion: input.schemaVersion ?? repo.schemaVersion,
+          graphVersion: input.graphVersion ?? repo.graphVersion,
           revision: revisionNumber,
           branchName: input.branchName,
           parentRevision,
@@ -441,6 +443,8 @@ export function firebasePersistence<TState>(
         });
 
         transaction.update(refs.repo(input.repoId), {
+          schemaVersion: input.schemaVersion ?? repo.schemaVersion,
+          graphVersion: input.graphVersion ?? repo.graphVersion,
           nextRevision: revisionNumber + 1,
           updatedAt: timestamp
         });
@@ -1290,6 +1294,8 @@ function createHeadRecord<TState>(input: {
 
 function createRevisionRecord(input: {
   readonly repo: RepoRecord;
+  readonly schemaVersion?: number;
+  readonly graphVersion?: string;
   readonly revision: RevisionNumber;
   readonly branchName: BranchName;
   readonly parentRevision: RevisionNumber | null;
@@ -1305,8 +1311,8 @@ function createRevisionRecord(input: {
     parentRevision: input.parentRevision,
     branchName: input.branchName,
     stateHash: input.stateHash,
-    schemaVersion: input.repo.schemaVersion,
-    graphVersion: input.repo.graphVersion,
+    schemaVersion: input.schemaVersion ?? input.repo.schemaVersion,
+    graphVersion: input.graphVersion ?? input.repo.graphVersion,
     ...(input.message === undefined ? {} : { message: input.message }),
     createdAt: input.timestamp,
     ...(input.author === undefined ? {} : { createdBy: input.author }),

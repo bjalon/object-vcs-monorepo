@@ -31,3 +31,24 @@ export class TagAlreadyExistsError extends ObjectVcsError {}
 export class DirtyHeadError extends ObjectVcsError {}
 export class ConcurrencyConflictError extends ObjectVcsError {}
 export class PersistenceError extends ObjectVcsError {}
+
+export interface MigrationErrorDetails {
+  readonly from: string;
+  readonly to: string;
+  readonly cause?: unknown;
+}
+
+export class MigrationError extends ObjectVcsError {
+  public readonly from: string;
+  public readonly to: string;
+  public override readonly cause?: unknown;
+
+  public constructor(message: string, details: MigrationErrorDetails) {
+    super(message);
+    this.from = details.from;
+    this.to = details.to;
+    if (details.cause !== undefined) {
+      this.cause = details.cause;
+    }
+  }
+}

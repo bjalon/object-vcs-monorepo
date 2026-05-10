@@ -3,11 +3,13 @@ import { z } from "zod";
 
 import {
   DirtyHeadError,
+  MigrationError,
   createRepository,
   defineGraph,
   inMemoryPersistence,
   singleton,
-  type InferState
+  type InferState,
+  type PersistenceAdapter
 } from "./index.js";
 
 const CounterSchema = z.object({
@@ -20,6 +22,18 @@ const graph = defineGraph({
 });
 
 type CounterState = InferState<typeof graph>;
+
+const LegacyCounterSchema = z.object({
+  value: z.number().int(),
+  label: z.string(),
+  legacy: z.string()
+});
+
+const legacyGraph = defineGraph({
+  counter: singleton(LegacyCounterSchema)
+});
+
+type LegacyCounterState = InferState<typeof legacyGraph>;
 
 function initialState(value = 0): CounterState {
   return {
@@ -39,6 +53,22 @@ function createCounterRepository(repoId: string) {
     defaultBranch: "main",
     persistence: inMemoryPersistence<CounterState>()
   });
+}
+
+function legacyState(value = 0): LegacyCounterState {
+  return {
+    counter: {
+      value,
+      label: `value-${value}`,
+      legacy: "drop-me"
+    }
+  };
+}
+
+function asPersistence<TState>(
+  persistence: PersistenceAdapter<unknown>
+): PersistenceAdapter<TState> {
+  return persistence as unknown as PersistenceAdapter<TState>;
 }
 
 describe("Object VCS repository with in-memory persistence", () => {
@@ -274,5 +304,129 @@ describe("Object VCS repository with in-memory persistence", () => {
     expect(branch.status).toBe("clean");
     expect(head.headRevision).toBe(1);
     expect(head.state).toEqual(initialState());
+  });
+
+  it("keeps revision graph versions and reads old revisions through migrations", async () => {
+    const persistence = inMemoryPersistence<unknown>();
+    const legacyRepo = createRepository({
+      repoId: "migration-read",
+      graph: legacyGraph,
+      schemaVersion: 1,
+      graphVersion: "counter-v1",
+      defaultBranch: "main",
+      persistence: asPersistence<LegacyCounterState>(persistence)
+    });
+    await legacyRepo.init({ initialState: legacyState() });
+
+    const repo = createRepository({
+      repoId: "migration-read",
+      graph,
+      schemaVersion: 2,
+      graphVersion: "counter-v2",
+      defaultBranch: "main",
+      migrations: [
+        {
+          from: "counter-v1",
+          to: "counter-v2",
+          migrate: state => {
+            const parsed = legacyGraph.validateState(state);
+            return {
+              counter: {
+                value: parsed.counter.value,
+                label: parsed.counter.label
+              }
+            };
+          }
+        }
+      ],
+      persistence: asPersistence<CounterState>(persistence)
+    });
+
+    const revisions = await repo.listRevisions();
+    expect(revisions[0]?.graphVersion).toBe("counter-v1");
+    await expect(repo.readRevision(1)).rejects.toThrow(
+      "Revision graph version does not match repository graph."
+    );
+    await expect(repo.readRevision(1, { migrateTo: "current" })).resolves.toEqual(
+      initialState()
+    );
+  });
+
+  it("fails explicitly when no migration path exists", async () => {
+    const persistence = inMemoryPersistence<unknown>();
+    const legacyRepo = createRepository({
+      repoId: "migration-missing",
+      graph: legacyGraph,
+      schemaVersion: 1,
+      graphVersion: "counter-v1",
+      defaultBranch: "main",
+      persistence: asPersistence<LegacyCounterState>(persistence)
+    });
+    await legacyRepo.init({ initialState: legacyState() });
+
+    const repo = createRepository({
+      repoId: "migration-missing",
+      graph,
+      schemaVersion: 2,
+      graphVersion: "counter-v2",
+      defaultBranch: "main",
+      persistence: asPersistence<CounterState>(persistence)
+    });
+
+    await expect(
+      repo.readRevision(1, { migrateTo: "current" })
+    ).rejects.toBeInstanceOf(MigrationError);
+  });
+
+  it("migrates HEAD into a new revision using the target graph version", async () => {
+    const persistence = inMemoryPersistence<unknown>();
+    const legacyRepo = createRepository({
+      repoId: "migration-head",
+      graph: legacyGraph,
+      schemaVersion: 1,
+      graphVersion: "counter-v1",
+      defaultBranch: "main",
+      persistence: asPersistence<LegacyCounterState>(persistence)
+    });
+    await legacyRepo.init({ initialState: legacyState(3) });
+
+    const repo = createRepository({
+      repoId: "migration-head",
+      graph,
+      schemaVersion: 2,
+      graphVersion: "counter-v2",
+      defaultBranch: "main",
+      migrations: [
+        {
+          from: "counter-v1",
+          to: "counter-v2",
+          migrate: state => {
+            const parsed = legacyGraph.validateState(state);
+            return {
+              counter: {
+                value: parsed.counter.value,
+                label: parsed.counter.label
+              }
+            };
+          }
+        }
+      ],
+      persistence: asPersistence<CounterState>(persistence)
+    });
+
+    const preview = await repo.getHead({ migrateTo: "current" });
+    expect(preview.state).toEqual(initialState(3));
+
+    const result = await repo.migrateHead({
+      author: "Migrator"
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.revision.revision).toBe(2);
+    expect(result.revision.graphVersion).toBe("counter-v2");
+    expect(result.revision.parentRevision).toBe(1);
+    expect(result.head.status).toBe("clean");
+    expect(result.head.state).toEqual(initialState(3));
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(3));
   });
 });
