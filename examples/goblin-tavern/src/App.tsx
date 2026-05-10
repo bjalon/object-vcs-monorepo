@@ -11,7 +11,7 @@ import {
 import { ObjectVcsProvider, RevisionTimeline } from "@bjalon/object-vcs-react";
 
 import { firebaseRuntimeStatus, objectVcsRepoId } from "./firebase.js";
-import type { Goblin, MenuItem, TavernEvent, TavernState } from "./graph.js";
+import type { Goblin, TavernState } from "./graph.js";
 import { initialState } from "./initialState.js";
 import { goblinTavernExample } from "./index.js";
 import { goblinTavernRepository } from "./repo.js";
@@ -34,6 +34,17 @@ const snacks = [
   "tartine de boue",
   "chips de racine"
 ] as const;
+
+const busyLabels: Record<BusyAction, string> = {
+  init: "Initialisation du repository",
+  dirty: "Enregistrement du brouillon",
+  commit: "Creation de revision",
+  tag: "Creation du tag",
+  branch: "Creation de branche",
+  restore: "Restauration de revision",
+  checkout: "Changement de branche",
+  preview: "Lecture de revision"
+};
 
 export function App() {
   if (!firebaseRuntimeStatus.configured || goblinTavernRepository === null) {
@@ -93,8 +104,9 @@ function GoblinTavernApp() {
     useState<RevisionSummary | null>(null);
   const [selectedState, setSelectedState] = useState<TavernState | null>(null);
   const [message, setMessage] = useState("Service du soir");
-  const [tagName, setTagName] = useState("menu-halloween");
+  const [tagName, setTagName] = useState("service-du-soir");
   const [branchName, setBranchName] = useState("univers-sans-soupe");
+  const [fullCheckEnabled, setFullCheckEnabled] = useState(false);
   const [busy, setBusy] = useState<BusyAction | null>(null);
   const [error, setError] = useState<unknown>(undefined);
 
@@ -135,6 +147,7 @@ function GoblinTavernApp() {
     () => new Map(tags.map(tag => [tag.name, tag.revision])),
     [tags]
   );
+  const busyText = busy === null ? "Pret" : busyLabels[busy];
 
   async function runAction(action: BusyAction, task: () => Promise<void>) {
     setBusy(action);
@@ -169,13 +182,25 @@ function GoblinTavernApp() {
   }
 
   async function updateDirty(updater: (current: TavernState) => TavernState) {
-    await runAction("dirty", async () => {
-      await repo.update(updater, {
+    setBusy("dirty");
+    setError(undefined);
+
+    try {
+      const result = await repo.update(updater, {
         branch: activeBranch,
         commit: false,
         author: "Goblin Editor"
       });
-    });
+      setHead(result.head);
+
+      if (fullCheckEnabled) {
+        await refresh();
+      }
+    } catch (caughtError: unknown) {
+      setError(caughtError);
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function commitHead(allowEmpty = false) {
@@ -250,9 +275,14 @@ function GoblinTavernApp() {
           <p className="eyebrow">Object VCS example</p>
           <h1>{goblinTavernExample.name}</h1>
         </div>
-        <span className={head?.status === "dirty" ? "status-pill dirty" : "status-pill clean"}>
-          {head === null ? "Repository not initialized" : `HEAD ${head.status}`}
-        </span>
+        <div className="status-stack">
+          <span className={head?.status === "dirty" ? "status-pill dirty" : "status-pill clean"}>
+            {head === null ? "Repository not initialized" : `HEAD ${head.status}`}
+          </span>
+          <span className={busy === null ? "activity-indicator" : "activity-indicator busy"}>
+            {busyText}
+          </span>
+        </div>
       </section>
 
       <section className="toolbar">
@@ -291,6 +321,7 @@ function GoblinTavernApp() {
           <section className="dashboard-grid">
             <TavernPanel
               state={state}
+              disabled={busy !== null}
               onReputationChange={delta =>
                 void updateDirty(current => ({
                   ...current,
@@ -301,32 +332,9 @@ function GoblinTavernApp() {
                 }))
               }
             />
-            <ChaosPanel
-              state={state}
-              onChaosChange={delta =>
-                void updateDirty(current => ({
-                  ...current,
-                  chaosSettings: {
-                    ...current.chaosSettings,
-                    chaosLevel: clamp(current.chaosSettings.chaosLevel + delta, 0, 10)
-                  }
-                }))
-              }
-              onThemeChange={theme =>
-                void updateDirty(current => ({
-                  ...current,
-                  chaosSettings: {
-                    ...current.chaosSettings,
-                    theme
-                  }
-                }))
-              }
-            />
-          </section>
-
-          <section className="content-grid">
             <GoblinPanel
               goblins={state.goblins}
+              disabled={busy !== null}
               onAdd={() => void addGoblin(updateDirty)}
               onMood={id => void cycleGoblinMood(updateDirty, id)}
               onDelete={id =>
@@ -338,64 +346,27 @@ function GoblinTavernApp() {
                 })
               }
             />
-            <MenuPanel
-              menuItems={state.menuItems}
-              onAdd={() => void addMenuItem(updateDirty)}
-              onToggle={id =>
-                void updateDirty(current => {
-                  const item = current.menuItems[id];
-                  if (item === undefined) {
-                    return current;
-                  }
-
-                  return {
-                    ...current,
-                    menuItems: {
-                      ...current.menuItems,
-                      [id]: {
-                        ...item,
-                        inStock: !item.inStock
-                      }
-                    }
-                  };
-                })
-              }
-              onDelete={id =>
-                void updateDirty(current => {
-                  const nextMenu = Object.fromEntries(
-                    Object.entries(current.menuItems).filter(([itemId]) => itemId !== id)
-                  ) as Record<string, MenuItem>;
-                  return { ...current, menuItems: nextMenu };
-                })
-              }
-            />
-            <EventPanel
-              events={state.tavernEvents}
-              onAdd={() => void addEvent(updateDirty)}
-              onResolve={id =>
-                void updateDirty(current => {
-                  const event = current.tavernEvents[id];
-                  if (event === undefined) {
-                    return current;
-                  }
-
-                  return {
-                    ...current,
-                    tavernEvents: {
-                      ...current.tavernEvents,
-                      [id]: {
-                        ...event,
-                        resolved: true
-                      }
-                    }
-                  };
-                })
-              }
-            />
           </section>
 
           <section className="panel action-panel">
             <h2>Versioning</h2>
+            <div className="form-row">
+              <label>
+                Check complet apres modification
+                <select
+                  value={fullCheckEnabled ? "true" : "false"}
+                  onChange={event => setFullCheckEnabled(event.target.value === "true")}
+                >
+                  <option value="false">Desactive</option>
+                  <option value="true">Active</option>
+                </select>
+              </label>
+              <span>
+                {fullCheckEnabled
+                  ? "Chaque brouillon relit HEAD, revisions, tags et branches."
+                  : "Chaque brouillon met seulement HEAD a jour localement."}
+              </span>
+            </div>
             <div className="form-row">
               <label>
                 Message
@@ -473,6 +444,7 @@ function GoblinTavernApp() {
 
 function TavernPanel(props: {
   readonly state: TavernState;
+  readonly disabled: boolean;
   readonly onReputationChange: (delta: number) => void;
 }) {
   return (
@@ -484,10 +456,10 @@ function TavernPanel(props: {
         <strong>{props.state.tavern.reputation}</strong>
       </div>
       <div className="button-row">
-        <button type="button" onClick={() => props.onReputationChange(-3)}>
+        <button type="button" onClick={() => props.onReputationChange(-3)} disabled={props.disabled}>
           -3
         </button>
-        <button type="button" onClick={() => props.onReputationChange(5)}>
+        <button type="button" onClick={() => props.onReputationChange(5)} disabled={props.disabled}>
           +5
         </button>
       </div>
@@ -495,111 +467,40 @@ function TavernPanel(props: {
   );
 }
 
-function ChaosPanel(props: {
-  readonly state: TavernState;
-  readonly onChaosChange: (delta: number) => void;
-  readonly onThemeChange: (theme: TavernState["chaosSettings"]["theme"]) => void;
-}) {
-  return (
-    <section className="panel">
-      <h2>Chaos</h2>
-      <div className="metric">
-        <span>Niveau</span>
-        <strong>{props.state.chaosSettings.chaosLevel}/10</strong>
-      </div>
-      <div className="button-row">
-        <button type="button" onClick={() => props.onChaosChange(-1)}>
-          -
-        </button>
-        <button type="button" onClick={() => props.onChaosChange(1)}>
-          +
-        </button>
-      </div>
-      <select
-        value={props.state.chaosSettings.theme}
-        onChange={event =>
-          props.onThemeChange(event.target.value as TavernState["chaosSettings"]["theme"])
-        }
-      >
-        <option value="sunny">sunny</option>
-        <option value="dungeon">dungeon</option>
-        <option value="lava">lava</option>
-      </select>
-    </section>
-  );
-}
-
 function GoblinPanel(props: {
   readonly goblins: Readonly<Record<string, Goblin>>;
+  readonly disabled: boolean;
   readonly onAdd: () => void;
   readonly onMood: (id: string) => void;
   readonly onDelete: (id: string) => void;
 }) {
   return (
     <section className="panel list-panel">
-      <HeaderWithAction title="Goblins" action="Ajouter" onAction={props.onAdd} />
+      <HeaderWithAction
+        title="Goblins"
+        action="Ajouter"
+        disabled={props.disabled}
+        onAction={props.onAdd}
+      />
       {Object.values(props.goblins).map(goblin => (
         <article key={goblin.id} className="list-item">
           <strong>{goblin.name}</strong>
           <span>{goblin.role} · {goblin.mood} · energie {goblin.energy}</span>
           <span>{goblin.favoriteSnack}</span>
           <div className="button-row">
-            <button type="button" onClick={() => props.onMood(goblin.id)}>
+            <button
+              type="button"
+              onClick={() => props.onMood(goblin.id)}
+              disabled={props.disabled}
+            >
               Humeur
             </button>
-            <button type="button" onClick={() => props.onDelete(goblin.id)}>
+            <button
+              type="button"
+              onClick={() => props.onDelete(goblin.id)}
+              disabled={props.disabled}
+            >
               Retirer
-            </button>
-          </div>
-        </article>
-      ))}
-    </section>
-  );
-}
-
-function MenuPanel(props: {
-  readonly menuItems: Readonly<Record<string, MenuItem>>;
-  readonly onAdd: () => void;
-  readonly onToggle: (id: string) => void;
-  readonly onDelete: (id: string) => void;
-}) {
-  return (
-    <section className="panel list-panel">
-      <HeaderWithAction title="Menu" action="Ajouter" onAction={props.onAdd} />
-      {Object.values(props.menuItems).map(item => (
-        <article key={item.id} className="list-item">
-          <strong>{item.name}</strong>
-          <span>{item.pricePebbles} cailloux · etrangete {item.weirdness}/5</span>
-          <span>{item.inStock ? "en stock" : "rupture"}</span>
-          <div className="button-row">
-            <button type="button" onClick={() => props.onToggle(item.id)}>
-              Stock
-            </button>
-            <button type="button" onClick={() => props.onDelete(item.id)}>
-              Retirer
-            </button>
-          </div>
-        </article>
-      ))}
-    </section>
-  );
-}
-
-function EventPanel(props: {
-  readonly events: Readonly<Record<string, TavernEvent>>;
-  readonly onAdd: () => void;
-  readonly onResolve: (id: string) => void;
-}) {
-  return (
-    <section className="panel list-panel">
-      <HeaderWithAction title="Evenements" action="Ajouter" onAction={props.onAdd} />
-      {Object.values(props.events).map(event => (
-        <article key={event.id} className="list-item">
-          <strong>{event.title}</strong>
-          <span>{event.severity} · {event.resolved ? "resolu" : "ouvert"}</span>
-          <div className="button-row">
-            <button type="button" onClick={() => props.onResolve(event.id)} disabled={event.resolved}>
-              Resoudre
             </button>
           </div>
         </article>
@@ -611,12 +512,13 @@ function EventPanel(props: {
 function HeaderWithAction(props: {
   readonly title: string;
   readonly action: string;
+  readonly disabled?: boolean;
   readonly onAction: () => void;
 }) {
   return (
     <div className="panel-header">
       <h2>{props.title}</h2>
-      <button type="button" onClick={props.onAction}>
+      <button type="button" onClick={props.onAction} disabled={props.disabled === true}>
         {props.action}
       </button>
     </div>
@@ -688,43 +590,6 @@ async function cycleGoblinMood(
       }
     };
   });
-}
-
-async function addMenuItem(
-  updateDirty: (updater: (current: TavernState) => TavernState) => Promise<void>
-) {
-  const id = `menu_${Date.now().toString(36)}`;
-  await updateDirty(current => ({
-    ...current,
-    menuItems: {
-      ...current.menuItems,
-      [id]: {
-        id,
-        name: "Ragout experimental",
-        pricePebbles: 11,
-        weirdness: 4,
-        inStock: true
-      }
-    }
-  }));
-}
-
-async function addEvent(
-  updateDirty: (updater: (current: TavernState) => TavernState) => Promise<void>
-) {
-  const id = `event_${Date.now().toString(36)}`;
-  await updateDirty(current => ({
-    ...current,
-    tavernEvents: {
-      ...current.tavernEvents,
-      [id]: {
-        id,
-        title: "Un tonneau negocie son depart",
-        severity: "minor",
-        resolved: false
-      }
-    }
-  }));
 }
 
 function clamp(value: number, min: number, max: number): number {
