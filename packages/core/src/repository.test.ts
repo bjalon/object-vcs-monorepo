@@ -12,6 +12,7 @@ import {
   inMemoryPersistence,
   singleton,
   type BranchRecord,
+  type GarbageCollectionPlan,
   type InferState,
   type PersistenceAdapter
 } from "./index.js";
@@ -94,6 +95,17 @@ function findBranch(
     throw new Error(`Branch "${name}" was not listed.`);
   }
   return branch;
+}
+
+function findProtectedRevision(
+  plan: GarbageCollectionPlan,
+  revision: number
+) {
+  return plan.protectedRevisions.find(item => item.revision === revision);
+}
+
+function findBlockedRevision(plan: GarbageCollectionPlan, revision: number) {
+  return plan.blockedRevisions.find(item => item.revision === revision);
 }
 
 describe("Object VCS repository with in-memory persistence", () => {
@@ -429,6 +441,118 @@ describe("Object VCS repository with in-memory persistence", () => {
       status: "clean",
       createdFromRevision: 1
     });
+  });
+
+  it("protects tagged revisions in garbage collection plans", async () => {
+    const repo = createCounterRepository("gc-tagged");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    await repo.tag("keep-r2", { revision: 2 });
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    expect(findProtectedRevision(plan, 2)?.reasons).toContain("tagged");
+    expect(plan.deletableRevisions.map(revision => revision.revision)).toEqual(
+      []
+    );
+  });
+
+  it("protects branch heads in garbage collection plans", async () => {
+    const repo = createCounterRepository("gc-branch-head");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    expect(findProtectedRevision(plan, 2)?.reasons).toContain("branch-head");
+    expect(plan.deletableRevisions).toEqual([]);
+  });
+
+  it("protects dirty base revisions in garbage collection plans", async () => {
+    const repo = createCounterRepository("gc-dirty-base");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(4));
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 2 });
+
+    expect(findProtectedRevision(plan, 1)?.reasons).toContain(
+      "dirty-base-revision"
+    );
+    expect(plan.deletableRevisions).toEqual([]);
+  });
+
+  it("protects parents of protected revisions", async () => {
+    const repo = createCounterRepository("gc-protected-parent");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.update(() => initialState(3), { commit: true });
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 4 });
+
+    expect(findProtectedRevision(plan, 3)?.reasons).toContain("branch-head");
+    expect(findProtectedRevision(plan, 2)?.reasons).toContain(
+      "ancestor-of-protected-revision"
+    );
+    expect(findProtectedRevision(plan, 1)?.reasons).toContain(
+      "ancestor-of-protected-revision"
+    );
+    expect(plan.deletableRevisions).toEqual([]);
+  });
+
+  it("proposes unreachable revisions for deletion", async () => {
+    const repo = createCounterRepository("gc-unreachable");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    expect(plan.deletableRevisions.map(revision => revision.revision)).toEqual([
+      2
+    ]);
+    expect(await repo.readRevision(2)).toEqual(initialState(2));
+  });
+
+  it("filters deletion candidates with beforeRevision", async () => {
+    const repo = createCounterRepository("gc-before-revision");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 2 });
+
+    expect(plan.deletableRevisions).toEqual([]);
+    expect(findBlockedRevision(plan, 2)?.reasons).toContain(
+      "after-before-revision-threshold"
+    );
+  });
+
+  it("computes a stable refs snapshot hash", async () => {
+    const repo = createCounterRepository("gc-stable-hash");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+
+    const firstPlan = await repo.planGarbageCollection({ beforeRevision: 3 });
+    const secondPlan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    expect(firstPlan.refsSnapshot).toEqual(secondPlan.refsSnapshot);
+    expect(firstPlan.refsSnapshotHash).toBe(secondPlan.refsSnapshotHash);
+  });
+
+  it("does not propose dangerous parent deletion", async () => {
+    const repo = createCounterRepository("gc-no-dangerous-parent");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.update(() => initialState(3), { commit: true });
+    await repo.tag("keep-tip", { revision: 3 });
+
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    expect(plan.deletableRevisions).toEqual([]);
+    expect(findProtectedRevision(plan, 2)?.reasons).toContain(
+      "ancestor-of-protected-revision"
+    );
   });
 
   it("creates a branch from an old revision and diverges without merging", async () => {

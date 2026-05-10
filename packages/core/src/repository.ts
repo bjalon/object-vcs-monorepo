@@ -32,9 +32,18 @@ import type {
   TagRecord
 } from "./types.js";
 import type {
+  BlockedRevisionReason,
+  DeletableRevision,
   DeleteTagResult,
+  GarbageCollectableBlob,
+  GarbageCollectionPlan,
+  GarbageCollectionRefsSnapshot,
   PersistenceAdapter,
+  PlanGarbageCollectionOptions,
+  ProtectedRevisionReason,
+  RequiredGarbageCollectionPlanOptions,
   RevisionSummary,
+  StorageEstimate,
   Unsubscribe
 } from "./persistence.js";
 
@@ -217,6 +226,9 @@ export interface ObjectVcsRepository<TState> {
     name: TagName,
     options?: DeleteTagOptions
   ): Promise<DeleteTagResult>;
+  planGarbageCollection(
+    options?: PlanGarbageCollectionOptions
+  ): Promise<GarbageCollectionPlan>;
   listBranches(): Promise<BranchRecord[]>;
   createBranch(
     name: BranchName,
@@ -1002,6 +1014,38 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       });
     },
 
+    async planGarbageCollection(
+      planOptions: PlanGarbageCollectionOptions = {}
+    ): Promise<GarbageCollectionPlan> {
+      const normalizedOptions = normalizeGarbageCollectionPlanOptions(
+        planOptions
+      );
+
+      if (options.persistence.planGarbageCollection !== undefined) {
+        return options.persistence.planGarbageCollection({
+          repoId: options.repoId,
+          ...(planOptions.beforeRevision === undefined
+            ? {}
+            : { beforeRevision: planOptions.beforeRevision }),
+          keepTagged: true,
+          keepBranchHeads: true,
+          keepDirtyBaseRevisions: true,
+          includeOrphanBlobs: normalizedOptions.includeOrphanBlobs,
+          protectRevisions: normalizedOptions.protectRevisions,
+          ...(normalizedOptions.maxRevisionsToDelete === null
+            ? {}
+            : { maxRevisionsToDelete: normalizedOptions.maxRevisionsToDelete }),
+          estimateStorage: normalizedOptions.estimateStorage
+        });
+      }
+
+      return planGarbageCollectionFromRepository({
+        repoId: options.repoId,
+        persistence: options.persistence,
+        options: normalizedOptions
+      });
+    },
+
     async listBranches(): Promise<BranchRecord[]> {
       return options.persistence.listBranches({
         repoId: options.repoId
@@ -1096,6 +1140,337 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     singletons: crudHelpers.singletons,
     entities: crudHelpers.entities
   };
+}
+
+function normalizeGarbageCollectionPlanOptions(
+  options: PlanGarbageCollectionOptions
+): RequiredGarbageCollectionPlanOptions {
+  return {
+    beforeRevision: options.beforeRevision ?? null,
+    keepTagged: true,
+    keepBranchHeads: true,
+    keepDirtyBaseRevisions: true,
+    includeOrphanBlobs: options.includeOrphanBlobs ?? true,
+    protectRevisions: [...(options.protectRevisions ?? [])].sort(
+      (left, right) => left - right
+    ),
+    maxRevisionsToDelete: options.maxRevisionsToDelete ?? null,
+    estimateStorage: options.estimateStorage ?? true
+  };
+}
+
+async function planGarbageCollectionFromRepository<TState>(input: {
+  readonly repoId: RepositoryId;
+  readonly persistence: PersistenceAdapter<TState>;
+  readonly options: RequiredGarbageCollectionPlanOptions;
+}): Promise<GarbageCollectionPlan> {
+  const revisions = (
+    await input.persistence.listRevisions({
+      repoId: input.repoId,
+      order: "asc"
+    })
+  ).sort((left, right) => left.revision - right.revision);
+  const tags = (await input.persistence.listTags({ repoId: input.repoId })).sort(
+    (left, right) => left.name.localeCompare(right.name)
+  );
+  const branches = (
+    await input.persistence.listBranches({ repoId: input.repoId })
+  ).sort((left, right) => left.name.localeCompare(right.name));
+  const revisionMap = new Map<RevisionNumber, RevisionSummary>(
+    revisions.map(revision => [revision.revision, revision])
+  );
+  const protectedReasons = new Map<
+    RevisionNumber,
+    Set<ProtectedRevisionReason>
+  >();
+  const blockedReasons = new Map<RevisionNumber, Set<BlockedRevisionReason>>();
+  const latestRevision =
+    revisions.length === 0 ? null : revisions[revisions.length - 1]?.revision ?? null;
+
+  const refsSnapshot = buildGarbageCollectionRefsSnapshot({
+    tags,
+    branches,
+    latestRevision
+  });
+  const refsSnapshotHash = await hashState(refsSnapshot);
+
+  function addProtected(
+    revision: RevisionNumber,
+    reason: ProtectedRevisionReason
+  ): void {
+    const reasons = protectedReasons.get(revision) ?? new Set();
+    reasons.add(reason);
+    protectedReasons.set(revision, reasons);
+    addBlocked(revision, reason);
+  }
+
+  function addBlocked(
+    revision: RevisionNumber,
+    reason: BlockedRevisionReason
+  ): void {
+    const reasons = blockedReasons.get(revision) ?? new Set();
+    reasons.add(reason);
+    blockedReasons.set(revision, reasons);
+  }
+
+  const protectedRoots: RevisionNumber[] = [];
+  for (const tag of tags) {
+    addProtected(tag.revision, "tagged");
+    protectedRoots.push(tag.revision);
+  }
+
+  for (const branch of branches) {
+    if (branch.headRevision !== null) {
+      addProtected(branch.headRevision, "branch-head");
+      protectedRoots.push(branch.headRevision);
+    }
+    if (branch.baseRevision !== null) {
+      addProtected(branch.baseRevision, "branch-base-revision");
+      protectedRoots.push(branch.baseRevision);
+      if (branch.status === "dirty") {
+        addProtected(branch.baseRevision, "dirty-base-revision");
+      }
+    }
+  }
+
+  for (const revision of input.options.protectRevisions) {
+    addProtected(revision, "explicitly-protected");
+    protectedRoots.push(revision);
+  }
+
+  for (const revision of protectedRoots) {
+    if (!revisionMap.has(revision)) {
+      addBlocked(revision, "missing-metadata");
+      continue;
+    }
+    markAncestorRevisions({
+      startRevision: revision,
+      revisionMap,
+      onAncestor: ancestor => {
+        addProtected(ancestor, "ancestor-of-protected-revision");
+      },
+      onMissingParent: missingParent => {
+        addBlocked(missingParent, "missing-metadata");
+      },
+      onUnknownParent: child => {
+        addBlocked(child, "unknown-parent");
+      }
+    });
+  }
+
+  for (const revision of revisions) {
+    if (protectedReasons.has(revision.revision)) {
+      continue;
+    }
+    if (
+      input.options.beforeRevision !== null &&
+      revision.revision >= input.options.beforeRevision
+    ) {
+      addBlocked(revision.revision, "after-before-revision-threshold");
+      markAncestorRevisions({
+        startRevision: revision.revision,
+        revisionMap,
+        onAncestor: ancestor => {
+          if (!protectedReasons.has(ancestor)) {
+            addBlocked(ancestor, "ancestor-of-protected-revision");
+          }
+        },
+        onMissingParent: missingParent => {
+          addBlocked(missingParent, "missing-metadata");
+        },
+        onUnknownParent: child => {
+          addBlocked(child, "unknown-parent");
+        }
+      });
+    }
+  }
+
+  const deletableRevisions: DeletableRevision[] = [];
+  for (const revision of revisions) {
+    if (blockedReasons.has(revision.revision)) {
+      continue;
+    }
+    if (
+      revision.parentRevision !== null &&
+      !revisionMap.has(revision.parentRevision)
+    ) {
+      addBlocked(revision.revision, "unknown-parent");
+      continue;
+    }
+    if (revision.snapshotRef === undefined) {
+      addBlocked(revision.revision, "missing-metadata");
+      continue;
+    }
+
+    const estimatedStorage = await estimateRevisionStorage({
+      repoId: input.repoId,
+      persistence: input.persistence,
+      revision,
+      estimateStorage: input.options.estimateStorage
+    });
+    if (estimatedStorage === null) {
+      addBlocked(revision.revision, "missing-metadata");
+      continue;
+    }
+
+    deletableRevisions.push({
+      revision: revision.revision,
+      parentRevision: revision.parentRevision,
+      branchName: revision.branchName,
+      stateHash: revision.stateHash,
+      snapshotBlobRef: revision.snapshotRef,
+      estimatedStorage
+    });
+  }
+
+  const limitedDeletableRevisions =
+    input.options.maxRevisionsToDelete === null
+      ? deletableRevisions
+      : deletableRevisions.slice(0, input.options.maxRevisionsToDelete);
+  const orphanBlobs: GarbageCollectableBlob[] = [];
+  const estimatedFreedStorage = sumStorageEstimates([
+    ...limitedDeletableRevisions.map(revision => revision.estimatedStorage),
+    ...orphanBlobs.map(blob => blob.estimatedStorage)
+  ]);
+
+  return {
+    planId: `gc:${refsSnapshotHash}:${limitedDeletableRevisions
+      .map(revision => revision.revision)
+      .join(",")}`,
+    repoId: input.repoId,
+    strategy: "unreachable-snapshots-v1",
+    createdAt: new Date().toISOString(),
+    options: input.options,
+    protectedRevisions: mapReasonRecords(protectedReasons),
+    deletableRevisions: limitedDeletableRevisions,
+    blockedRevisions: mapReasonRecords(blockedReasons),
+    orphanBlobs,
+    estimatedFreedStorage,
+    refsSnapshot,
+    refsSnapshotHash
+  };
+}
+
+function buildGarbageCollectionRefsSnapshot(input: {
+  readonly tags: readonly TagRecord[];
+  readonly branches: readonly BranchRecord[];
+  readonly latestRevision: RevisionNumber | null;
+}): GarbageCollectionRefsSnapshot {
+  return {
+    tags: input.tags.map(tag => ({
+      name: tag.name,
+      revision: tag.revision
+    })),
+    branches: input.branches.map(branch => ({
+      name: branch.name,
+      headRevision: branch.headRevision,
+      baseRevision: branch.baseRevision,
+      status: branch.status,
+      ...(branch.headBlobRef === undefined
+        ? {}
+        : { headBlobRef: branch.headBlobRef })
+    })),
+    latestRevision: input.latestRevision
+  };
+}
+
+function markAncestorRevisions(input: {
+  readonly startRevision: RevisionNumber;
+  readonly revisionMap: ReadonlyMap<RevisionNumber, RevisionSummary>;
+  readonly onAncestor: (revision: RevisionNumber) => void;
+  readonly onMissingParent: (revision: RevisionNumber) => void;
+  readonly onUnknownParent: (revision: RevisionNumber) => void;
+}): void {
+  const visited = new Set<RevisionNumber>();
+  let currentRevision = input.startRevision;
+
+  while (!visited.has(currentRevision)) {
+    visited.add(currentRevision);
+    const current = input.revisionMap.get(currentRevision);
+    if (current === undefined) {
+      input.onMissingParent(currentRevision);
+      return;
+    }
+    if (current.parentRevision === null) {
+      return;
+    }
+    const parent = input.revisionMap.get(current.parentRevision);
+    if (parent === undefined) {
+      input.onMissingParent(current.parentRevision);
+      input.onUnknownParent(current.revision);
+      return;
+    }
+    input.onAncestor(parent.revision);
+    currentRevision = parent.revision;
+  }
+
+  input.onUnknownParent(currentRevision);
+}
+
+async function estimateRevisionStorage<TState>(input: {
+  readonly repoId: RepositoryId;
+  readonly persistence: PersistenceAdapter<TState>;
+  readonly revision: RevisionSummary;
+  readonly estimateStorage: boolean;
+}): Promise<StorageEstimate | null> {
+  if (!input.estimateStorage) {
+    return zeroStorageEstimate();
+  }
+
+  const storedRevision = await input.persistence.readRevision({
+    repoId: input.repoId,
+    revision: input.revision.revision
+  });
+  if (storedRevision === null) {
+    return null;
+  }
+
+  return {
+    bytes:
+      byteLength(stableStringify(storedRevision.revision)) +
+      byteLength(stableStringify(storedRevision.state)),
+    documents: 1,
+    blobs: input.revision.snapshotRef === undefined ? 0 : 1
+  };
+}
+
+function zeroStorageEstimate(): StorageEstimate {
+  return {
+    bytes: 0,
+    documents: 0,
+    blobs: 0
+  };
+}
+
+function sumStorageEstimates(
+  estimates: readonly StorageEstimate[]
+): StorageEstimate {
+  return estimates.reduce<StorageEstimate>(
+    (total, estimate) => ({
+      bytes: total.bytes + estimate.bytes,
+      documents: total.documents + estimate.documents,
+      blobs: total.blobs + estimate.blobs
+    }),
+    zeroStorageEstimate()
+  );
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+function mapReasonRecords<TReason extends string>(
+  reasons: ReadonlyMap<RevisionNumber, ReadonlySet<TReason>>
+): {
+  readonly revision: RevisionNumber;
+  readonly reasons: readonly TReason[];
+}[] {
+  return Array.from(reasons.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([revision, reasonSet]) => ({
+      revision,
+      reasons: Array.from(reasonSet).sort()
+    }));
 }
 
 function createCrudHelpers<TGraph extends ObjectVcsGraph>(

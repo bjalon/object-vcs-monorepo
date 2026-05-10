@@ -349,6 +349,10 @@ export interface ObjectVcsRepository<TState> {
     options?: DeleteTagOptions
   ): Promise<DeleteTagResult>;
 
+  planGarbageCollection(
+    options?: PlanGarbageCollectionOptions
+  ): Promise<GarbageCollectionPlan>;
+
   createBranch(
     name: string,
     options: CreateBranchOptions
@@ -415,6 +419,19 @@ export interface DeleteTagResult {
   deleted: boolean;
   name: string;
   previousRevision: RevisionNumber | null;
+}
+```
+
+```ts
+export interface PlanGarbageCollectionOptions {
+  beforeRevision?: RevisionNumber;
+  keepTagged?: true;
+  keepBranchHeads?: true;
+  keepDirtyBaseRevisions?: true;
+  includeOrphanBlobs?: boolean;
+  protectRevisions?: RevisionNumber[];
+  maxRevisionsToDelete?: number;
+  estimateStorage?: boolean;
 }
 ```
 
@@ -738,6 +755,10 @@ export interface PersistenceAdapter<TState> {
   listTags(input: ListTagsInput): Promise<TagRecord[]>;
 
   deleteTag(input: DeleteTagInput): Promise<DeleteTagResult>;
+
+  planGarbageCollection?(
+    input: PersistencePlanGarbageCollectionInput
+  ): Promise<GarbageCollectionPlan>;
 
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
 

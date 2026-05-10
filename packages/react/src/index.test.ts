@@ -303,6 +303,39 @@ function createRepositoryMock(): ObjectVcsRepository<TestState> {
         previousRevision: tag.revision
       };
     },
+    async planGarbageCollection() {
+      return {
+        planId: "gc:test",
+        repoId: "repo",
+        strategy: "unreachable-snapshots-v1",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        options: {
+          beforeRevision: null,
+          keepTagged: true,
+          keepBranchHeads: true,
+          keepDirtyBaseRevisions: true,
+          includeOrphanBlobs: true,
+          protectRevisions: [],
+          maxRevisionsToDelete: null,
+          estimateStorage: true
+        },
+        protectedRevisions: [],
+        deletableRevisions: [],
+        blockedRevisions: [],
+        orphanBlobs: [],
+        estimatedFreedStorage: {
+          bytes: 0,
+          documents: 0,
+          blobs: 0
+        },
+        refsSnapshot: {
+          tags: [],
+          branches: [],
+          latestRevision: null
+        },
+        refsSnapshotHash: "sha256:test"
+      };
+    },
     async listBranches() {
       return [branch];
     },

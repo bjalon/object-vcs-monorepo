@@ -4,6 +4,7 @@ import type {
   ConcurrencyMode,
   GraphIdentity,
   Head,
+  HeadStatus,
   RepositoryId,
   RevisionNumber,
   RevisionRecord,
@@ -157,6 +158,115 @@ export interface DeleteTagResult {
   readonly previousRevision: RevisionNumber | null;
 }
 
+export interface StorageEstimate {
+  readonly bytes: number;
+  readonly documents: number;
+  readonly blobs: number;
+}
+
+export type GarbageCollectionStrategy = "unreachable-snapshots-v1";
+
+export interface PlanGarbageCollectionOptions {
+  readonly beforeRevision?: RevisionNumber;
+  readonly keepTagged?: true;
+  readonly keepBranchHeads?: true;
+  readonly keepDirtyBaseRevisions?: true;
+  readonly includeOrphanBlobs?: boolean;
+  readonly protectRevisions?: readonly RevisionNumber[];
+  readonly maxRevisionsToDelete?: number;
+  readonly estimateStorage?: boolean;
+}
+
+export interface RequiredGarbageCollectionPlanOptions {
+  readonly beforeRevision: RevisionNumber | null;
+  readonly keepTagged: true;
+  readonly keepBranchHeads: true;
+  readonly keepDirtyBaseRevisions: true;
+  readonly includeOrphanBlobs: boolean;
+  readonly protectRevisions: readonly RevisionNumber[];
+  readonly maxRevisionsToDelete: number | null;
+  readonly estimateStorage: boolean;
+}
+
+export type ProtectedRevisionReason =
+  | "tagged"
+  | "branch-head"
+  | "dirty-base-revision"
+  | "branch-base-revision"
+  | "explicitly-protected"
+  | "ancestor-of-protected-revision";
+
+export interface ProtectedRevision {
+  readonly revision: RevisionNumber;
+  readonly reasons: readonly ProtectedRevisionReason[];
+}
+
+export interface DeletableRevision {
+  readonly revision: RevisionNumber;
+  readonly parentRevision: RevisionNumber | null;
+  readonly branchName: BranchName;
+  readonly stateHash: StateHash;
+  readonly snapshotBlobRef?: string;
+  readonly estimatedStorage: StorageEstimate;
+}
+
+export type BlockedRevisionReason =
+  | "tagged"
+  | "branch-head"
+  | "dirty-base-revision"
+  | "branch-base-revision"
+  | "explicitly-protected"
+  | "ancestor-of-protected-revision"
+  | "after-before-revision-threshold"
+  | "unknown-parent"
+  | "missing-metadata";
+
+export interface BlockedRevision {
+  readonly revision: RevisionNumber;
+  readonly reasons: readonly BlockedRevisionReason[];
+}
+
+export interface GarbageCollectableBlob {
+  readonly blobRef: string;
+  readonly reason: "orphan";
+  readonly estimatedStorage: StorageEstimate;
+}
+
+export interface GarbageCollectionRefsSnapshot {
+  readonly tags: readonly {
+    readonly name: TagName;
+    readonly revision: RevisionNumber;
+  }[];
+  readonly branches: readonly {
+    readonly name: BranchName;
+    readonly headRevision: RevisionNumber | null;
+    readonly baseRevision: RevisionNumber | null;
+    readonly status: HeadStatus;
+    readonly headBlobRef?: string;
+  }[];
+  readonly latestRevision: RevisionNumber | null;
+}
+
+export interface GarbageCollectionPlan {
+  readonly planId: string;
+  readonly repoId: RepositoryId;
+  readonly strategy: GarbageCollectionStrategy;
+  readonly createdAt: string;
+  readonly options: RequiredGarbageCollectionPlanOptions;
+  readonly protectedRevisions: readonly ProtectedRevision[];
+  readonly deletableRevisions: readonly DeletableRevision[];
+  readonly blockedRevisions: readonly BlockedRevision[];
+  readonly orphanBlobs: readonly GarbageCollectableBlob[];
+  readonly estimatedFreedStorage: StorageEstimate;
+  readonly refsSnapshot: GarbageCollectionRefsSnapshot;
+  readonly refsSnapshotHash: string;
+}
+
+export interface PersistencePlanGarbageCollectionInput
+  extends PlanGarbageCollectionOptions {
+  readonly repoId: RepositoryId;
+}
+
 export interface CreateBranchInput {
   readonly repoId: RepositoryId;
   readonly name: BranchName;
@@ -225,6 +335,9 @@ export interface PersistenceAdapter<TState> {
   createTag(input: CreateTagInput): Promise<TagRecord>;
   listTags(input: ListTagsInput): Promise<TagRecord[]>;
   deleteTag(input: DeleteTagInput): Promise<DeleteTagResult>;
+  planGarbageCollection?(
+    input: PersistencePlanGarbageCollectionInput
+  ): Promise<GarbageCollectionPlan>;
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
   updateBranch(input: UpdateBranchInput): Promise<BranchRecord>;
   restoreRevision(
