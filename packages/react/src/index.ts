@@ -885,6 +885,17 @@ function createRevisionItem<TState>(input: {
     input.revision.parentRevision === null
       ? "root"
       : `parent #${input.revision.parentRevision}`;
+  const metaTitle = [
+    input.revision.createdAt,
+    input.revision.createdBy === undefined
+      ? undefined
+      : `by ${input.revision.createdBy}`,
+    `branch ${input.revision.branchName}`,
+    `graph ${input.revision.graphVersion}`,
+    parentText
+  ]
+    .filter((item): item is string => item !== undefined)
+    .join(" · ");
   const refs = [
     ...input.branches.map(branch => ({
       key: `branch:${branch.name}`,
@@ -920,6 +931,7 @@ function createRevisionItem<TState>(input: {
     "li",
     {
       key: input.revision.revision,
+      title: metaTitle,
       style: input.selected ? timelineStyles.selectedItem : timelineStyles.item
     },
     createElement(
@@ -986,14 +998,7 @@ function createRevisionItem<TState>(input: {
             "Restore"
           )
     ),
-    createElement(
-      "div",
-      { style: timelineStyles.meta },
-      input.revision.createdAt,
-      input.revision.createdBy === undefined
-        ? null
-        : ` · ${input.revision.createdBy}`
-    )
+    null
   );
 }
 
@@ -1050,19 +1055,17 @@ const timelineStyles = {
     padding: 0
   },
   item: {
-    display: "grid",
-    gap: 6,
+    display: "block",
     border: "1px solid #d8dee9",
     borderRadius: 8,
-    padding: "8px 10px",
+    padding: "6px 8px",
     background: "#ffffff"
   },
   selectedItem: {
-    display: "grid",
-    gap: 6,
+    display: "block",
     border: "1px solid #0f766e",
     borderRadius: 8,
-    padding: "8px 10px",
+    padding: "6px 8px",
     background: "#ecfdf5",
     boxShadow: "0 1px 2px rgb(15 118 110 / 18%)"
   },
@@ -1071,7 +1074,8 @@ const timelineStyles = {
     gridTemplateColumns: "max-content minmax(0, 1fr) auto",
     alignItems: "center",
     gap: 8,
-    minWidth: 0
+    minWidth: 0,
+    width: "100%"
   },
   graphCell: {
     color: "#0f766e",
@@ -1127,12 +1131,13 @@ const timelineStyles = {
     color: "#111827",
     cursor: "pointer",
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     font: "inherit",
     gap: 8,
     justifyContent: "space-between",
     minHeight: 34,
     minWidth: 0,
+    overflow: "hidden",
     padding: "5px 6px",
     textAlign: "left"
   },
@@ -1144,12 +1149,13 @@ const timelineStyles = {
     color: "#064e3b",
     cursor: "pointer",
     display: "flex",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     font: "inherit",
     gap: 8,
     justifyContent: "space-between",
     minHeight: 34,
     minWidth: 0,
+    overflow: "hidden",
     padding: "5px 6px",
     textAlign: "left"
   },
@@ -1157,7 +1163,8 @@ const timelineStyles = {
     alignItems: "center",
     display: "flex",
     gap: 8,
-    minWidth: 0
+    minWidth: 0,
+    overflow: "hidden"
   },
   revisionNumber: {
     color: "#0f766e",
@@ -1196,9 +1203,12 @@ const timelineStyles = {
   },
   refs: {
     display: "flex",
-    flexWrap: "wrap",
+    flex: "0 0 auto",
+    flexWrap: "nowrap",
     gap: 4,
-    justifyContent: "flex-end"
+    justifyContent: "flex-end",
+    maxWidth: "45%",
+    overflow: "hidden"
   },
   tag: {
     border: "1px solid #cbd5e1",
