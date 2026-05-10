@@ -19,6 +19,7 @@ const requiredVariables = [
 type RequiredVariableName = (typeof requiredVariables)[number];
 
 const env = import.meta.env;
+const repoSchemaSuffix = "simple-v1";
 
 function readRequiredVariable(name: RequiredVariableName): string | null {
   const value = env[name];
@@ -75,5 +76,6 @@ export const firebaseRuntimeStatus: FirebaseRuntimeStatus =
         };
       })();
 
-export const objectVcsRepoId =
-  env.VITE_OBJECT_VCS_REPO_ID ?? "goblin-tavern-demo";
+const objectVcsRepoBaseId = env.VITE_OBJECT_VCS_REPO_ID ?? "goblin-tavern-demo";
+
+export const objectVcsRepoId = `${objectVcsRepoBaseId}-${repoSchemaSuffix}`;

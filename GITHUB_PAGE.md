@@ -21,6 +21,11 @@ VITE_OBJECT_VCS_REPO_ID=goblin-tavern-demo
 
 Les variables `VITE_*` sont injectees dans le bundle navigateur par Vite. Elles ne doivent donc contenir aucun secret serveur. La configuration Firebase Web contient des identifiants publics du projet/app Firebase, mais les droits doivent etre controles par les regles Firestore.
 
+Pour l'application d'exemple, `VITE_OBJECT_VCS_REPO_ID` sert de prefixe stable.
+Le code ajoute un suffixe de schema au runtime, par exemple
+`goblin-tavern-demo-simple-v1`, afin qu'un graph simplifie ne tente pas de
+relire un ancien HEAD incompatible.
+
 Le workflow [ci-pages.yml](.github/workflows/ci-pages.yml) fait ensuite :
 
 - `npm ci` ;

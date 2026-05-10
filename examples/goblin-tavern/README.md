@@ -23,6 +23,11 @@ VITE_OBJECT_VCS_REPO_ID=goblin-tavern-demo
 Ces variables sont exposees au navigateur par Vite. Ne mets pas de secret
 serveur dedans.
 
+`VITE_OBJECT_VCS_REPO_ID` est utilise comme prefixe stable. L'application ajoute
+un suffixe de schema au runtime, par exemple
+`goblin-tavern-demo-simple-v1`, pour eviter de relire un ancien repository dont
+le graph ne correspond plus au modele courant.
+
 ## Lancer
 
 Depuis la racine :

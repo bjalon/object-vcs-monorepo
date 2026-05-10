@@ -11,7 +11,7 @@ export const goblinTavernRepository =
         repoId: objectVcsRepoId,
         graph: goblinTavernGraph,
         schemaVersion: 1,
-        graphVersion: "goblin-tavern-v1",
+        graphVersion: "goblin-tavern-simple-v1",
         defaultBranch: "main",
         persistence: firebasePersistence<TavernState>({
           db: firebaseRuntimeStatus.db,
