@@ -15,13 +15,18 @@ import {
   BranchNotFoundError,
   ConcurrencyConflictError,
   DirtyHeadError,
+  GarbageCollectionPlanStaleError,
+  hashState,
   PersistenceError,
   RepositoryAlreadyExistsError,
   RepositoryNotFoundError,
   RevisionNotFoundError,
+  stableStringify,
   TagAlreadyExistsError,
   TagNotFoundError,
   TagRevisionMismatchError,
+  type BlockedRevision,
+  type BlockedRevisionReason,
   type BranchName,
   type BranchRecord,
   type CreateBranchInput,
@@ -32,6 +37,11 @@ import {
   type CreateTagInput,
   type DeleteTagInput,
   type DeleteTagResult,
+  type DeletableRevision,
+  type GarbageCollectableBlob,
+  type GarbageCollectionPlan,
+  type GarbageCollectionRefsSnapshot,
+  type GarbageCollectionRunResult,
   type GetBranchInput,
   type GetHeadInput,
   type GetRepoInput,
@@ -40,14 +50,20 @@ import {
   type ListRevisionsInput,
   type ListTagsInput,
   type PersistenceAdapter,
+  type PersistenceEstimateStorageInput,
+  type PersistencePlanGarbageCollectionInput,
+  type PersistenceRunGarbageCollectionInput,
+  type ProtectedRevisionReason,
   type ReadRevisionInput,
   type ReadRevisionStateInput,
   type RepoRecord,
+  type RepositoryStorageEstimate,
   type ResetBranchInput,
   type RestoreRevisionInput,
   type RevisionNumber,
   type RevisionRecord,
   type RevisionSummary,
+  type StorageEstimate,
   type StateHash,
   type StoredRevision,
   type TagRecord,
@@ -65,12 +81,19 @@ export interface FirebasePersistenceCollectionNames {
   readonly blobs?: string;
 }
 
+export interface FirebaseStorageEstimateOptions {
+  readonly fixedBytesPerDocument?: number;
+  readonly fixedBytesPerRevision?: number;
+  readonly fixedBytesPerBlob?: number;
+}
+
 export interface FirebasePersistenceOptions {
   readonly db: Firestore;
   readonly rootCollection?: string;
   readonly collections?: FirebasePersistenceCollectionNames;
   readonly checkpointEvery?: number;
   readonly maxInlineHeadStateBytes?: number;
+  readonly storageEstimate?: FirebaseStorageEstimateOptions;
   readonly now?: () => string;
 }
 
@@ -88,6 +111,7 @@ interface ResolvedFirebasePersistenceOptions {
   readonly collections: ResolvedCollectionNames;
   readonly checkpointEvery: number;
   readonly maxInlineHeadStateBytes: number;
+  readonly storageEstimate: Required<FirebaseStorageEstimateOptions>;
   readonly now: () => string;
 }
 
@@ -136,6 +160,7 @@ export interface FirebaseRevisionDocument {
 }
 
 interface FirebaseBlobDocument<TState = unknown> {
+  readonly blobRef?: string;
   readonly kind: "snapshot";
   readonly stateHash: string;
   readonly state: TState;
@@ -371,6 +396,7 @@ export function firebasePersistence<TState>(
           input.repoId,
           head
         );
+        touchRepoDocument(transaction, refs, input.repoId, timestamp);
 
         return { head };
       });
@@ -721,6 +747,13 @@ export function firebasePersistence<TState>(
             revisionStateToWrite,
             revisionToWrite.createdAt
           );
+        } else {
+          touchRepoDocument(
+            transaction,
+            refs,
+            input.repoId,
+            resolvedOptions.now()
+          );
         }
 
         transaction.set(tagReference, tag);
@@ -765,11 +798,186 @@ export function firebasePersistence<TState>(
         }
 
         transaction.delete(tagReference);
+        touchRepoDocument(transaction, refs, input.repoId, resolvedOptions.now());
         return {
           deleted: true,
           name: input.name,
           previousRevision: tag.revision
         };
+      });
+    },
+
+    async planGarbageCollection(
+      input: PersistencePlanGarbageCollectionInput
+    ): Promise<GarbageCollectionPlan> {
+      return planFirebaseGarbageCollection({
+        refs,
+        options: resolvedOptions,
+        input
+      });
+    },
+
+    async runGarbageCollection(
+      input: PersistenceRunGarbageCollectionInput
+    ): Promise<GarbageCollectionRunResult> {
+      const startedAt = resolvedOptions.now();
+      const recomputedPlan = await planFirebaseGarbageCollection({
+        refs,
+        options: resolvedOptions,
+        input: {
+          repoId: input.repoId,
+          ...(input.plan.options.beforeRevision === null
+            ? {}
+            : { beforeRevision: input.plan.options.beforeRevision }),
+          keepTagged: true,
+          keepBranchHeads: true,
+          keepDirtyBaseRevisions: true,
+          includeOrphanBlobs: input.plan.options.includeOrphanBlobs,
+          protectRevisions: input.plan.options.protectRevisions,
+          ...(input.plan.options.maxRevisionsToDelete === null
+            ? {}
+            : {
+                maxRevisionsToDelete:
+                  input.plan.options.maxRevisionsToDelete
+              }),
+          estimateStorage: input.plan.options.estimateStorage
+        }
+      });
+
+      if (recomputedPlan.refsSnapshotHash !== input.plan.refsSnapshotHash) {
+        throw new GarbageCollectionPlanStaleError(
+          "Garbage collection plan is stale. Recompute the plan before running it."
+        );
+      }
+
+      const dryRun = input.dryRun ?? false;
+      if (dryRun) {
+        return {
+          planId: input.plan.planId,
+          repoId: input.repoId,
+          dryRun: true,
+          deletedRevisions: [],
+          deletedBlobs: [],
+          skippedRevisions: recomputedPlan.blockedRevisions,
+          skippedBlobs: [],
+          freedStorageEstimate: zeroStorageEstimate(),
+          startedAt,
+          completedAt: resolvedOptions.now()
+        };
+      }
+
+      const deletedRevisions: RevisionNumber[] = [];
+      const skippedRevisions: BlockedRevision[] = [
+        ...recomputedPlan.blockedRevisions
+      ];
+
+      for (const chunk of chunkItems(recomputedPlan.deletableRevisions, 150)) {
+        const latestPlan = await planFirebaseGarbageCollection({
+          refs,
+          options: resolvedOptions,
+          input: {
+            repoId: input.repoId,
+            ...(input.plan.options.beforeRevision === null
+              ? {}
+              : { beforeRevision: input.plan.options.beforeRevision }),
+            keepTagged: true,
+            keepBranchHeads: true,
+            keepDirtyBaseRevisions: true,
+            includeOrphanBlobs: input.plan.options.includeOrphanBlobs,
+            protectRevisions: input.plan.options.protectRevisions,
+            ...(input.plan.options.maxRevisionsToDelete === null
+              ? {}
+              : {
+                  maxRevisionsToDelete:
+                    input.plan.options.maxRevisionsToDelete
+                }),
+            estimateStorage: input.plan.options.estimateStorage
+          }
+        });
+        if (latestPlan.refsSnapshotHash !== input.plan.refsSnapshotHash) {
+          throw new GarbageCollectionPlanStaleError(
+            "Garbage collection plan is stale. Recompute the plan before running it."
+          );
+        }
+
+        const latestDeletable = new Set(
+          latestPlan.deletableRevisions.map(revision => revision.revision)
+        );
+        const chunkResult = await runTransaction(
+          resolvedOptions.db,
+          async transaction => {
+            const chunkDeletedRevisions: RevisionNumber[] = [];
+            const chunkSkippedRevisions: BlockedRevision[] = [];
+
+            await readRepoOrThrowInTransaction(transaction, refs, input.repoId);
+            for (const revision of chunk) {
+              if (!latestDeletable.has(revision.revision)) {
+                chunkSkippedRevisions.push({
+                  revision: revision.revision,
+                  reasons: ["missing-metadata"]
+                });
+                continue;
+              }
+
+              const revisionSnapshot = await transaction.get(
+                refs.revision(input.repoId, revision.revision)
+              );
+              if (!revisionSnapshot.exists()) {
+                chunkSkippedRevisions.push({
+                  revision: revision.revision,
+                  reasons: ["missing-metadata"]
+                });
+                continue;
+              }
+
+              transaction.delete(refs.revision(input.repoId, revision.revision));
+              chunkDeletedRevisions.push(revision.revision);
+            }
+
+            touchRepoDocument(
+              transaction,
+              refs,
+              input.repoId,
+              resolvedOptions.now()
+            );
+            return {
+              deletedRevisions: chunkDeletedRevisions,
+              skippedRevisions: chunkSkippedRevisions
+            };
+          }
+        );
+        deletedRevisions.push(...chunkResult.deletedRevisions);
+        skippedRevisions.push(...chunkResult.skippedRevisions);
+      }
+
+      const deletedBlobs = await deleteGarbageCollectionBlobs({
+        refs,
+        options: resolvedOptions,
+        repoId: input.repoId,
+        plan: recomputedPlan
+      });
+
+      return {
+        planId: input.plan.planId,
+        repoId: input.repoId,
+        dryRun: false,
+        deletedRevisions,
+        deletedBlobs: deletedBlobs.deleted,
+        skippedRevisions,
+        skippedBlobs: deletedBlobs.skipped,
+        freedStorageEstimate: recomputedPlan.estimatedFreedStorage,
+        startedAt,
+        completedAt: resolvedOptions.now()
+      };
+    },
+
+    async estimateStorage(
+      input: PersistenceEstimateStorageInput
+    ): Promise<RepositoryStorageEstimate> {
+      return estimateFirebaseStorage({
+        refs,
+        options: resolvedOptions,
+        input
       });
     },
 
@@ -854,6 +1062,7 @@ export function firebasePersistence<TState>(
           input.repoId,
           head
         );
+        touchRepoDocument(transaction, refs, input.repoId, timestamp);
 
         return branch;
       });
@@ -876,6 +1085,12 @@ export function firebasePersistence<TState>(
         });
 
         transaction.set(refs.branch(input.repoId, input.branchName), branch);
+        touchRepoDocument(
+          transaction,
+          refs,
+          input.repoId,
+          resolvedOptions.now()
+        );
         return branch;
       });
     },
@@ -975,6 +1190,7 @@ export function firebasePersistence<TState>(
           input.repoId,
           nextHead
         );
+        touchRepoDocument(transaction, refs, input.repoId, timestamp);
 
         return branch;
       });
@@ -1059,6 +1275,14 @@ function resolveOptions(
     },
     checkpointEvery: options.checkpointEvery ?? 1,
     maxInlineHeadStateBytes: options.maxInlineHeadStateBytes ?? 900_000,
+    storageEstimate: {
+      fixedBytesPerDocument:
+        options.storageEstimate?.fixedBytesPerDocument ?? 512,
+      fixedBytesPerRevision:
+        options.storageEstimate?.fixedBytesPerRevision ?? 256,
+      fixedBytesPerBlob:
+        options.storageEstimate?.fixedBytesPerBlob ?? 128
+    },
     now: options.now ?? (() => new Date().toISOString())
   };
 }
@@ -1073,6 +1297,7 @@ interface ReferenceFactory {
   revision(repoId: string, revision: RevisionNumber): DocumentReference;
   tags(repoId: string): ReturnType<typeof collection>;
   tag(repoId: string, name: string): DocumentReference;
+  blobs(repoId: string): ReturnType<typeof collection>;
   blob(repoId: string, stateHash: StateHash): DocumentReference;
 }
 
@@ -1107,11 +1332,11 @@ function createReferenceFactory(
     tag(repoId, name) {
       return doc(this.tags(repoId), encodeId(name));
     },
+    blobs(repoId) {
+      return collection(this.repo(repoId), options.collections.blobs);
+    },
     blob(repoId, stateHash) {
-      return doc(
-        collection(this.repo(repoId), options.collections.blobs),
-        encodeId(stateHash)
-      );
+      return doc(this.blobs(repoId), encodeId(stateHash));
     }
   };
 }
@@ -1124,6 +1349,22 @@ function encodeId(value: string): string {
   return Array.from(new TextEncoder().encode(value))
     .map(byte => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function decodeId(value: string): string {
+  if (value.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(value)) {
+    throw new PersistenceError(
+      `Firestore document identifier "${value}" is not valid hex.`
+    );
+  }
+
+  const bytes: number[] = [];
+  for (let index = 0; index < value.length; index += 2) {
+    const byte = Number.parseInt(value.slice(index, index + 2), 16);
+    bytes.push(byte);
+  }
+
+  return new TextDecoder().decode(new Uint8Array(bytes));
 }
 
 function readDocumentData(snapshot: { data(): unknown }): FirestoreData {
@@ -1508,12 +1749,24 @@ function writeBlob<TState>(
   timestamp: string
 ): void {
   const document: FirebaseBlobDocument<TState> = {
+    blobRef,
     kind: "snapshot",
     stateHash,
     state,
     createdAt: timestamp
   };
   transaction.set(refs.blob(repoId, blobRef), document);
+}
+
+function touchRepoDocument(
+  transaction: TransactionLike,
+  refs: ReferenceFactory,
+  repoId: string,
+  timestamp: string
+): void {
+  transaction.update(refs.repo(repoId), {
+    updatedAt: timestamp
+  });
 }
 
 async function readRevisionSnapshotState<TState>(
@@ -1571,6 +1824,613 @@ async function readBlobStateInTransaction<TState>(
   return document.state;
 }
 
+async function planFirebaseGarbageCollection(input: {
+  readonly refs: ReferenceFactory;
+  readonly options: ResolvedFirebasePersistenceOptions;
+  readonly input: PersistencePlanGarbageCollectionInput;
+}): Promise<GarbageCollectionPlan> {
+  await readRepoOrThrow(input.refs, input.input.repoId);
+  const normalizedOptions = normalizeGarbageCollectionPlanOptions(input.input);
+  const revisions = (
+    await listAllFirebaseRevisions(input.refs, input.input.repoId)
+  ).sort((left, right) => left.revision - right.revision);
+  const tags = (await listAllFirebaseTags(input.refs, input.input.repoId)).sort(
+    (left, right) => left.name.localeCompare(right.name)
+  );
+  const branches = (
+    await listAllFirebaseBranches(input.refs, input.input.repoId)
+  ).sort((left, right) => left.name.localeCompare(right.name));
+  const revisionMap = new Map<RevisionNumber, RevisionSummary>(
+    revisions.map(revision => [revision.revision, revision])
+  );
+  const protectedReasons = new Map<
+    RevisionNumber,
+    Set<ProtectedRevisionReason>
+  >();
+  const blockedReasons = new Map<RevisionNumber, Set<BlockedRevisionReason>>();
+  const latestRevision =
+    revisions.length === 0 ? null : revisions[revisions.length - 1]?.revision ?? null;
+  const refsSnapshot = buildRefsSnapshot({
+    tags,
+    branches,
+    latestRevision
+  });
+  const refsSnapshotHash = await hashState(refsSnapshot);
+
+  function addProtected(
+    revision: RevisionNumber,
+    reason: ProtectedRevisionReason
+  ): void {
+    const reasons = protectedReasons.get(revision) ?? new Set();
+    reasons.add(reason);
+    protectedReasons.set(revision, reasons);
+    addBlocked(revision, reason);
+  }
+
+  function addBlocked(
+    revision: RevisionNumber,
+    reason: BlockedRevisionReason
+  ): void {
+    const reasons = blockedReasons.get(revision) ?? new Set();
+    reasons.add(reason);
+    blockedReasons.set(revision, reasons);
+  }
+
+  const protectedRoots: RevisionNumber[] = [];
+  for (const tag of tags) {
+    addProtected(tag.revision, "tagged");
+    protectedRoots.push(tag.revision);
+  }
+
+  for (const branch of branches) {
+    if (branch.headRevision !== null) {
+      addProtected(branch.headRevision, "branch-head");
+      protectedRoots.push(branch.headRevision);
+    }
+    if (branch.baseRevision !== null) {
+      addProtected(branch.baseRevision, "branch-base-revision");
+      protectedRoots.push(branch.baseRevision);
+      if (branch.status === "dirty") {
+        addProtected(branch.baseRevision, "dirty-base-revision");
+      }
+    }
+  }
+
+  for (const revision of normalizedOptions.protectRevisions) {
+    addProtected(revision, "explicitly-protected");
+    protectedRoots.push(revision);
+  }
+
+  for (const revision of protectedRoots) {
+    if (!revisionMap.has(revision)) {
+      addBlocked(revision, "missing-metadata");
+      continue;
+    }
+    markAncestorRevisions({
+      startRevision: revision,
+      revisionMap,
+      onAncestor: ancestor => {
+        addProtected(ancestor, "ancestor-of-protected-revision");
+      },
+      onMissingParent: missingParent => {
+        addBlocked(missingParent, "missing-metadata");
+      },
+      onUnknownParent: child => {
+        addBlocked(child, "unknown-parent");
+      }
+    });
+  }
+
+  for (const revision of revisions) {
+    if (protectedReasons.has(revision.revision)) {
+      continue;
+    }
+    if (
+      normalizedOptions.beforeRevision !== null &&
+      revision.revision >= normalizedOptions.beforeRevision
+    ) {
+      addBlocked(revision.revision, "after-before-revision-threshold");
+      markAncestorRevisions({
+        startRevision: revision.revision,
+        revisionMap,
+        onAncestor: ancestor => {
+          if (!protectedReasons.has(ancestor)) {
+            addBlocked(ancestor, "ancestor-of-protected-revision");
+          }
+        },
+        onMissingParent: missingParent => {
+          addBlocked(missingParent, "missing-metadata");
+        },
+        onUnknownParent: child => {
+          addBlocked(child, "unknown-parent");
+        }
+      });
+    }
+  }
+
+  const deletableRevisions: DeletableRevision[] = [];
+  for (const revision of revisions) {
+    if (blockedReasons.has(revision.revision)) {
+      continue;
+    }
+    if (
+      revision.parentRevision !== null &&
+      !revisionMap.has(revision.parentRevision)
+    ) {
+      addBlocked(revision.revision, "unknown-parent");
+      continue;
+    }
+    if (revision.snapshotRef === undefined) {
+      addBlocked(revision.revision, "missing-metadata");
+      continue;
+    }
+
+    const estimatedStorage = await estimateFirebaseRevisionStorage({
+      refs: input.refs,
+      repoId: input.input.repoId,
+      revision,
+      estimateStorage: normalizedOptions.estimateStorage
+    });
+    if (estimatedStorage === null) {
+      addBlocked(revision.revision, "missing-metadata");
+      continue;
+    }
+
+    deletableRevisions.push({
+      revision: revision.revision,
+      parentRevision: revision.parentRevision,
+      branchName: revision.branchName,
+      stateHash: revision.stateHash,
+      snapshotBlobRef: revision.snapshotRef,
+      estimatedStorage
+    });
+  }
+
+  const limitedDeletableRevisions =
+    normalizedOptions.maxRevisionsToDelete === null
+      ? deletableRevisions
+      : deletableRevisions.slice(0, normalizedOptions.maxRevisionsToDelete);
+  const orphanBlobs = normalizedOptions.includeOrphanBlobs
+    ? await listOrphanFirebaseBlobs({
+        refs: input.refs,
+        repoId: input.input.repoId,
+        liveBlobRefs: collectLiveBlobRefs({ revisions, branches }),
+        estimateStorage: normalizedOptions.estimateStorage
+      })
+    : [];
+  const estimatedFreedStorage = sumStorageEstimates([
+    ...limitedDeletableRevisions.map(revision => revision.estimatedStorage),
+    ...orphanBlobs.map(blob => blob.estimatedStorage)
+  ]);
+
+  return {
+    planId: `gc:${refsSnapshotHash}:${limitedDeletableRevisions
+      .map(revision => revision.revision)
+      .join(",")}:${orphanBlobs.map(blob => blob.blobRef).join(",")}`,
+    repoId: input.input.repoId,
+    strategy: "unreachable-snapshots-v1",
+    createdAt: input.options.now(),
+    options: normalizedOptions,
+    protectedRevisions: mapReasonRecords(protectedReasons),
+    deletableRevisions: limitedDeletableRevisions,
+    blockedRevisions: mapReasonRecords(blockedReasons),
+    orphanBlobs,
+    estimatedFreedStorage,
+    refsSnapshot,
+    refsSnapshotHash
+  };
+}
+
+function normalizeGarbageCollectionPlanOptions(
+  options: PersistencePlanGarbageCollectionInput
+): GarbageCollectionPlan["options"] {
+  return {
+    beforeRevision: options.beforeRevision ?? null,
+    keepTagged: true,
+    keepBranchHeads: true,
+    keepDirtyBaseRevisions: true,
+    includeOrphanBlobs: options.includeOrphanBlobs ?? true,
+    protectRevisions: [...(options.protectRevisions ?? [])].sort(
+      (left, right) => left - right
+    ),
+    maxRevisionsToDelete: options.maxRevisionsToDelete ?? null,
+    estimateStorage: options.estimateStorage ?? true
+  };
+}
+
+async function listAllFirebaseRevisions(
+  refs: ReferenceFactory,
+  repoId: string
+): Promise<RevisionSummary[]> {
+  const snapshots = await getDocs(refs.revisions(repoId));
+  return snapshots.docs.map(snapshot =>
+    revisionRecordFromDocument(repoId, readDocumentData(snapshot))
+  );
+}
+
+async function listAllFirebaseTags(
+  refs: ReferenceFactory,
+  repoId: string
+): Promise<TagRecord[]> {
+  const snapshots = await getDocs(refs.tags(repoId));
+  return snapshots.docs.map(snapshot =>
+    tagRecordFromDocument(readDocumentData(snapshot))
+  );
+}
+
+async function listAllFirebaseBranches(
+  refs: ReferenceFactory,
+  repoId: string
+): Promise<BranchRecord[]> {
+  const snapshots = await getDocs(refs.branches(repoId));
+  const branches = await Promise.all(
+    snapshots.docs.map(async snapshot => {
+      const branch = branchRecordFromDocument(readDocumentData(snapshot));
+      const headSnapshot = await getDoc(refs.head(repoId, branch.name));
+      if (!headSnapshot.exists()) {
+        return branch;
+      }
+      const headBlobRef = headBlobRefFromDocument(readDocumentData(headSnapshot));
+      return headBlobRef === null ? branch : { ...branch, headBlobRef };
+    })
+  );
+  return branches;
+}
+
+function buildRefsSnapshot(input: {
+  readonly tags: readonly TagRecord[];
+  readonly branches: readonly BranchRecord[];
+  readonly latestRevision: RevisionNumber | null;
+}): GarbageCollectionRefsSnapshot {
+  return {
+    tags: input.tags.map(tag => ({
+      name: tag.name,
+      revision: tag.revision
+    })),
+    branches: input.branches.map(branch => ({
+      name: branch.name,
+      headRevision: branch.headRevision,
+      baseRevision: branch.baseRevision,
+      status: branch.status,
+      ...(branch.headBlobRef === undefined ? {} : { headBlobRef: branch.headBlobRef })
+    })),
+    latestRevision: input.latestRevision
+  };
+}
+
+function markAncestorRevisions(input: {
+  readonly startRevision: RevisionNumber;
+  readonly revisionMap: ReadonlyMap<RevisionNumber, RevisionSummary>;
+  readonly onAncestor: (revision: RevisionNumber) => void;
+  readonly onMissingParent: (revision: RevisionNumber) => void;
+  readonly onUnknownParent: (revision: RevisionNumber) => void;
+}): void {
+  const visited = new Set<RevisionNumber>();
+  let currentRevision = input.startRevision;
+
+  while (!visited.has(currentRevision)) {
+    visited.add(currentRevision);
+    const current = input.revisionMap.get(currentRevision);
+    if (current === undefined) {
+      input.onMissingParent(currentRevision);
+      return;
+    }
+    if (current.parentRevision === null) {
+      return;
+    }
+    const parent = input.revisionMap.get(current.parentRevision);
+    if (parent === undefined) {
+      input.onMissingParent(current.parentRevision);
+      input.onUnknownParent(current.revision);
+      return;
+    }
+    input.onAncestor(parent.revision);
+    currentRevision = parent.revision;
+  }
+
+  input.onUnknownParent(currentRevision);
+}
+
+async function estimateFirebaseRevisionStorage(input: {
+  readonly refs: ReferenceFactory;
+  readonly repoId: string;
+  readonly revision: RevisionSummary;
+  readonly estimateStorage: boolean;
+}): Promise<StorageEstimate | null> {
+  if (!input.estimateStorage) {
+    return zeroStorageEstimate();
+  }
+
+  if (input.revision.snapshotRef === undefined) {
+    return null;
+  }
+
+  const blobSnapshot = await getDoc(
+    input.refs.blob(input.repoId, input.revision.snapshotRef)
+  );
+  if (!blobSnapshot.exists()) {
+    return null;
+  }
+
+  const blobData = readDocumentData(blobSnapshot);
+  return {
+    bytes: jsonByteSize(input.revision) + jsonByteSize(blobData),
+    documents: 2,
+    blobs: 1
+  };
+}
+
+function collectLiveBlobRefs(input: {
+  readonly revisions: readonly RevisionSummary[];
+  readonly branches: readonly BranchRecord[];
+}): Set<string> {
+  const refs = new Set<string>();
+  for (const revision of input.revisions) {
+    if (revision.snapshotRef !== undefined) {
+      refs.add(revision.snapshotRef);
+    }
+  }
+  for (const branch of input.branches) {
+    if (branch.headBlobRef !== undefined) {
+      refs.add(branch.headBlobRef);
+    }
+  }
+  return refs;
+}
+
+async function listOrphanFirebaseBlobs(input: {
+  readonly refs: ReferenceFactory;
+  readonly repoId: string;
+  readonly liveBlobRefs: ReadonlySet<string>;
+  readonly estimateStorage: boolean;
+}): Promise<GarbageCollectableBlob[]> {
+  const snapshots = await getDocs(input.refs.blobs(input.repoId));
+  const orphans: GarbageCollectableBlob[] = [];
+
+  for (const snapshot of snapshots.docs) {
+    const data = readDocumentData(snapshot);
+    const blobRef = blobRefFromSnapshot(snapshot.id, data);
+    if (input.liveBlobRefs.has(blobRef)) {
+      continue;
+    }
+
+    orphans.push({
+      blobRef,
+      reason: "orphan",
+      estimatedStorage: input.estimateStorage
+        ? {
+            bytes: jsonByteSize(data),
+            documents: 1,
+            blobs: 1
+          }
+        : zeroStorageEstimate()
+    });
+  }
+
+  return orphans.sort((left, right) => left.blobRef.localeCompare(right.blobRef));
+}
+
+async function deleteGarbageCollectionBlobs(input: {
+  readonly refs: ReferenceFactory;
+  readonly options: ResolvedFirebasePersistenceOptions;
+  readonly repoId: string;
+  readonly plan: GarbageCollectionPlan;
+}): Promise<{
+  readonly deleted: readonly string[];
+  readonly skipped: GarbageCollectionRunResult["skippedBlobs"];
+}> {
+  const candidateBlobRefs = new Set<string>([
+    ...input.plan.orphanBlobs.map(blob => blob.blobRef),
+    ...input.plan.deletableRevisions.flatMap(revision =>
+      revision.snapshotBlobRef === undefined ? [] : [revision.snapshotBlobRef]
+    )
+  ]);
+  const deleted: string[] = [];
+  const skipped: GarbageCollectionRunResult["skippedBlobs"][number][] = [];
+
+  for (const chunk of chunkItems(Array.from(candidateBlobRefs).sort(), 150)) {
+    const revisions = await listAllFirebaseRevisions(input.refs, input.repoId);
+    const branches = await listAllFirebaseBranches(input.refs, input.repoId);
+    const liveBlobRefs = collectLiveBlobRefs({ revisions, branches });
+
+    const chunkResult = await runTransaction(
+      input.options.db,
+      async transaction => {
+        const chunkDeleted: string[] = [];
+        const chunkSkipped: GarbageCollectionRunResult["skippedBlobs"][number][] = [];
+
+        await readRepoOrThrowInTransaction(transaction, input.refs, input.repoId);
+        for (const blobRef of chunk) {
+          const blobSnapshot = await transaction.get(
+            input.refs.blob(input.repoId, blobRef)
+          );
+          if (!blobSnapshot.exists()) {
+            chunkSkipped.push({ blobRef, reason: "missing" });
+            continue;
+          }
+          if (liveBlobRefs.has(blobRef)) {
+            chunkSkipped.push({ blobRef, reason: "still-referenced" });
+            continue;
+          }
+
+          transaction.delete(input.refs.blob(input.repoId, blobRef));
+          chunkDeleted.push(blobRef);
+        }
+        touchRepoDocument(
+          transaction,
+          input.refs,
+          input.repoId,
+          input.options.now()
+        );
+        return {
+          deleted: chunkDeleted,
+          skipped: chunkSkipped
+        };
+      }
+    );
+    deleted.push(...chunkResult.deleted);
+    skipped.push(...chunkResult.skipped);
+  }
+
+  return { deleted, skipped };
+}
+
+async function estimateFirebaseStorage(input: {
+  readonly refs: ReferenceFactory;
+  readonly options: ResolvedFirebasePersistenceOptions;
+  readonly input: PersistenceEstimateStorageInput;
+}): Promise<RepositoryStorageEstimate> {
+  const includeRevisions = input.input.includeRevisions ?? true;
+  const includeBlobs = input.input.includeBlobs ?? true;
+  const includeHeads = input.input.includeHeads ?? true;
+  const includeBranches = input.input.includeBranches ?? true;
+  const includeTags = input.input.includeTags ?? true;
+  const includeAdapterSpecific = input.input.adapterSpecific ?? true;
+  const repoSnapshot = await getDoc(input.refs.repo(input.input.repoId));
+  if (!repoSnapshot.exists()) {
+    throw new RepositoryNotFoundError(
+      `Repository "${input.input.repoId}" was not found.`
+    );
+  }
+
+  let rawStateBytes = 0;
+  let objectVcsMetadataBytes = jsonByteSize(readDocumentData(repoSnapshot));
+  let blobBytes = 0;
+  let documentCount = 1;
+  let revisionCount = 0;
+  let blobCount = 0;
+  let branchCount = 0;
+  let tagCount = 0;
+
+  if (includeRevisions) {
+    const snapshots = await getDocs(input.refs.revisions(input.input.repoId));
+    revisionCount = snapshots.docs.length;
+    documentCount += snapshots.docs.length;
+    objectVcsMetadataBytes += snapshots.docs.reduce(
+      (total, snapshot) => total + jsonByteSize(readDocumentData(snapshot)),
+      0
+    );
+  }
+
+  if (includeBlobs) {
+    const snapshots = await getDocs(input.refs.blobs(input.input.repoId));
+    blobCount = snapshots.docs.length;
+    documentCount += snapshots.docs.length;
+    for (const snapshot of snapshots.docs) {
+      const data = readDocumentData(snapshot);
+      const state = (data as unknown as FirebaseBlobDocument<unknown>).state;
+      const stateBytes = jsonByteSize(state);
+      rawStateBytes += stateBytes;
+      blobBytes += jsonByteSize(data);
+    }
+  }
+
+  if (includeHeads) {
+    const snapshots = await getDocs(input.refs.heads(input.input.repoId));
+    documentCount += snapshots.docs.length;
+    objectVcsMetadataBytes += snapshots.docs.reduce(
+      (total, snapshot) => total + jsonByteSize(readDocumentData(snapshot)),
+      0
+    );
+  }
+
+  if (includeBranches) {
+    const snapshots = await getDocs(input.refs.branches(input.input.repoId));
+    branchCount = snapshots.docs.length;
+    documentCount += snapshots.docs.length;
+    objectVcsMetadataBytes += snapshots.docs.reduce(
+      (total, snapshot) => total + jsonByteSize(readDocumentData(snapshot)),
+      0
+    );
+  }
+
+  if (includeTags) {
+    const snapshots = await getDocs(input.refs.tags(input.input.repoId));
+    tagCount = snapshots.docs.length;
+    documentCount += snapshots.docs.length;
+    objectVcsMetadataBytes += snapshots.docs.reduce(
+      (total, snapshot) => total + jsonByteSize(readDocumentData(snapshot)),
+      0
+    );
+  }
+
+  const adapterOverhead = includeAdapterSpecific
+    ? documentCount * input.options.storageEstimate.fixedBytesPerDocument +
+      revisionCount * input.options.storageEstimate.fixedBytesPerRevision +
+      blobCount * input.options.storageEstimate.fixedBytesPerBlob
+    : 0;
+
+  return {
+    repoId: input.input.repoId,
+    rawStateBytes,
+    objectVcsMetadataBytes,
+    blobBytes,
+    estimatedBackendBytes:
+      objectVcsMetadataBytes + blobBytes + adapterOverhead,
+    documentCount,
+    revisionCount,
+    blobCount,
+    branchCount,
+    tagCount,
+    notes: [
+      "Firestore storage estimate is approximate. It includes Object VCS JSON payloads and configurable per-document overhead, but it does not guarantee exact billed storage."
+    ]
+  };
+}
+
+function mapReasonRecords<TReason extends string>(
+  reasons: ReadonlyMap<RevisionNumber, ReadonlySet<TReason>>
+): {
+  readonly revision: RevisionNumber;
+  readonly reasons: readonly TReason[];
+}[] {
+  return Array.from(reasons.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([revision, reasonSet]) => ({
+      revision,
+      reasons: Array.from(reasonSet).sort()
+    }));
+}
+
+function sumStorageEstimates(
+  estimates: readonly StorageEstimate[]
+): StorageEstimate {
+  return estimates.reduce<StorageEstimate>(
+    (total, estimate) => ({
+      bytes: total.bytes + estimate.bytes,
+      documents: total.documents + estimate.documents,
+      blobs: total.blobs + estimate.blobs
+    }),
+    zeroStorageEstimate()
+  );
+}
+
+function zeroStorageEstimate(): StorageEstimate {
+  return {
+    bytes: 0,
+    documents: 0,
+    blobs: 0
+  };
+}
+
+function chunkItems<TItem>(
+  items: readonly TItem[],
+  size: number
+): readonly TItem[][] {
+  const chunks: TItem[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function blobRefFromSnapshot(snapshotId: string, data: FirestoreData): string {
+  const document = data as unknown as FirebaseBlobDocument<unknown>;
+  return typeof document.blobRef === "string"
+    ? document.blobRef
+    : decodeId(snapshotId);
+}
+
 function checkExpectedHeadHash<TState>(
   head: Head<TState>,
   expectedHeadHash: StateHash | undefined
@@ -1594,7 +2454,7 @@ function requireString(
 }
 
 function jsonByteSize(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  return new TextEncoder().encode(stableStringify(value)).byteLength;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
