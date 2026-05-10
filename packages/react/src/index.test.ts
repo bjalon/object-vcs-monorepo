@@ -336,6 +336,24 @@ function createRepositoryMock(): ObjectVcsRepository<TestState> {
         refsSnapshotHash: "sha256:test"
       };
     },
+    async runGarbageCollection() {
+      return {
+        planId: "gc:test",
+        repoId: "repo",
+        dryRun: false,
+        deletedRevisions: [],
+        deletedBlobs: [],
+        skippedRevisions: [],
+        skippedBlobs: [],
+        freedStorageEstimate: {
+          bytes: 0,
+          documents: 0,
+          blobs: 0
+        },
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:00.000Z"
+      };
+    },
     async listBranches() {
       return [branch];
     },

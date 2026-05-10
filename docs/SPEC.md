@@ -353,6 +353,11 @@ export interface ObjectVcsRepository<TState> {
     options?: PlanGarbageCollectionOptions
   ): Promise<GarbageCollectionPlan>;
 
+  runGarbageCollection(
+    plan: GarbageCollectionPlan,
+    options?: RunGarbageCollectionOptions
+  ): Promise<GarbageCollectionRunResult>;
+
   createBranch(
     name: string,
     options: CreateBranchOptions
@@ -432,6 +437,15 @@ export interface PlanGarbageCollectionOptions {
   protectRevisions?: RevisionNumber[];
   maxRevisionsToDelete?: number;
   estimateStorage?: boolean;
+}
+```
+
+```ts
+export interface RunGarbageCollectionOptions {
+  dryRun?: boolean;
+  recomputeBeforeRun?: true;
+  allowStalePlan?: false;
+  author?: string;
 }
 ```
 
@@ -759,6 +773,10 @@ export interface PersistenceAdapter<TState> {
   planGarbageCollection?(
     input: PersistencePlanGarbageCollectionInput
   ): Promise<GarbageCollectionPlan>;
+
+  runGarbageCollection?(
+    input: PersistenceRunGarbageCollectionInput
+  ): Promise<GarbageCollectionRunResult>;
 
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
 
@@ -1142,6 +1160,7 @@ class ConcurrencyConflictError extends ObjectVcsError {}
 class DetachedHeadWriteError extends ObjectVcsError {}
 class MigrationError extends ObjectVcsError {}
 class PersistenceError extends ObjectVcsError {}
+class GarbageCollectionPlanStaleError extends ObjectVcsError {}
 ```
 
 ## 26. Invariants

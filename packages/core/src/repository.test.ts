@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   DirtyHeadError,
+  GarbageCollectionPlanStaleError,
   MigrationError,
   SchemaCompatibilityError,
   TagNotFoundError,
@@ -553,6 +554,141 @@ describe("Object VCS repository with in-memory persistence", () => {
     expect(findProtectedRevision(plan, 2)?.reasons).toContain(
       "ancestor-of-protected-revision"
     );
+  });
+
+  it("dry-runs garbage collection without deleting anything", async () => {
+    const repo = createCounterRepository("gc-run-dry");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan, { dryRun: true });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.deletedRevisions).toEqual([]);
+    expect(result.deletedBlobs).toEqual([]);
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("deletes an unreachable revision when garbage collection runs", async () => {
+    const repo = createCounterRepository("gc-run-unreachable");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan);
+
+    expect(result.deletedRevisions).toEqual([2]);
+    await expect(repo.readRevision(2)).rejects.toThrow(
+      'Revision "2" was not found.'
+    );
+  });
+
+  it("does not delete a tagged revision when garbage collection runs", async () => {
+    const repo = createCounterRepository("gc-run-tagged");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    await repo.tag("keep", { revision: 2 });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan);
+
+    expect(result.deletedRevisions).toEqual([]);
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("does not delete a branch head when garbage collection runs", async () => {
+    const repo = createCounterRepository("gc-run-branch-head");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan);
+
+    expect(result.deletedRevisions).toEqual([]);
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("does not delete protected ancestors when garbage collection runs", async () => {
+    const repo = createCounterRepository("gc-run-ancestor");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.update(() => initialState(3), { commit: true });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan);
+
+    expect(result.deletedRevisions).toEqual([]);
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("refuses a stale garbage collection plan after a tag is created", async () => {
+    const repo = createCounterRepository("gc-run-stale-tag");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    await repo.tag("new-protection", { revision: 2 });
+
+    await expect(repo.runGarbageCollection(plan)).rejects.toBeInstanceOf(
+      GarbageCollectionPlanStaleError
+    );
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("refuses a stale garbage collection plan after a branch is created", async () => {
+    const repo = createCounterRepository("gc-run-stale-branch");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    await repo.createBranch("protect-r2", { from: 2 });
+
+    await expect(repo.runGarbageCollection(plan)).rejects.toBeInstanceOf(
+      GarbageCollectionPlanStaleError
+    );
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("deletes snapshot blobs after deleting unreachable revisions", async () => {
+    const repo = createCounterRepository("gc-run-delete-blob");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan);
+
+    expect(result.deletedRevisions).toEqual([2]);
+    expect(result.deletedBlobs).toEqual([
+      plan.deletableRevisions[0]?.snapshotBlobRef
+    ]);
+    expect(result.skippedBlobs).toEqual([]);
+  });
+
+  it("keeps snapshot blobs that are still referenced", async () => {
+    const repo = createCounterRepository("gc-run-keep-blob");
+    await repo.init({ initialState: initialState() });
+    await repo.commit({ allowEmpty: true, message: "Empty duplicate" });
+    await repo.resetBranch("main", { to: 1, mode: "hard" });
+    const plan = await repo.planGarbageCollection({ beforeRevision: 3 });
+
+    const result = await repo.runGarbageCollection(plan);
+
+    expect(result.deletedRevisions).toEqual([2]);
+    expect(result.deletedBlobs).toEqual([]);
+    expect(result.skippedBlobs).toEqual([
+      {
+        blobRef: plan.deletableRevisions[0]?.snapshotBlobRef,
+        reason: "still-referenced"
+      }
+    ]);
+    await expect(repo.readRevision(1)).resolves.toEqual(initialState());
   });
 
   it("creates a branch from an old revision and diverges without merging", async () => {

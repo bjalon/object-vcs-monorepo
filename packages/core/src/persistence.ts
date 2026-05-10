@@ -262,9 +262,38 @@ export interface GarbageCollectionPlan {
   readonly refsSnapshotHash: string;
 }
 
+export interface RunGarbageCollectionOptions {
+  readonly dryRun?: boolean;
+  readonly recomputeBeforeRun?: true;
+  readonly allowStalePlan?: false;
+  readonly author?: string;
+}
+
+export interface GarbageCollectionRunResult {
+  readonly planId: string;
+  readonly repoId: RepositoryId;
+  readonly dryRun: boolean;
+  readonly deletedRevisions: readonly RevisionNumber[];
+  readonly deletedBlobs: readonly string[];
+  readonly skippedRevisions: readonly BlockedRevision[];
+  readonly skippedBlobs: readonly {
+    readonly blobRef: string;
+    readonly reason: "still-referenced" | "missing" | "adapter-error";
+  }[];
+  readonly freedStorageEstimate: StorageEstimate;
+  readonly startedAt: string;
+  readonly completedAt: string;
+}
+
 export interface PersistencePlanGarbageCollectionInput
   extends PlanGarbageCollectionOptions {
   readonly repoId: RepositoryId;
+}
+
+export interface PersistenceRunGarbageCollectionInput
+  extends RunGarbageCollectionOptions {
+  readonly repoId: RepositoryId;
+  readonly plan: GarbageCollectionPlan;
 }
 
 export interface CreateBranchInput {
@@ -338,6 +367,9 @@ export interface PersistenceAdapter<TState> {
   planGarbageCollection?(
     input: PersistencePlanGarbageCollectionInput
   ): Promise<GarbageCollectionPlan>;
+  runGarbageCollection?(
+    input: PersistenceRunGarbageCollectionInput
+  ): Promise<GarbageCollectionRunResult>;
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
   updateBranch(input: UpdateBranchInput): Promise<BranchRecord>;
   restoreRevision(

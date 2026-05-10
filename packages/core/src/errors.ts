@@ -34,6 +34,7 @@ export class DirtyHeadError extends ObjectVcsError {}
 export class ConcurrencyConflictError extends ObjectVcsError {}
 export class PersistenceError extends ObjectVcsError {}
 export class SchemaCompatibilityError extends ObjectVcsError {}
+export class GarbageCollectionPlanStaleError extends ObjectVcsError {}
 
 export interface MigrationErrorDetails {
   readonly from: string;

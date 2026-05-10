@@ -3,6 +3,7 @@ import {
   BranchNotFoundError,
   ConcurrencyConflictError,
   DirtyHeadError,
+  GarbageCollectionPlanStaleError,
   PersistenceError,
   RepositoryAlreadyExistsError,
   RepositoryNotFoundError,
@@ -11,6 +12,7 @@ import {
   TagNotFoundError,
   TagRevisionMismatchError
 } from "./errors.js";
+import { hashState, stableStringify } from "./hash.js";
 import { cloneJson } from "./json.js";
 import type {
   BranchRecord,
@@ -20,6 +22,7 @@ import type {
   TagRecord
 } from "./types.js";
 import type {
+  BlockedRevision,
   CreateBranchInput,
   CreateRepoInput,
   CreateRepoResult,
@@ -34,13 +37,17 @@ import type {
   ListBranchesInput,
   ListRevisionsInput,
   ListTagsInput,
+  GarbageCollectionRefsSnapshot,
+  GarbageCollectionRunResult,
   PersistenceAdapter,
+  PersistenceRunGarbageCollectionInput,
   ReadRevisionInput,
   ReadRevisionStateInput,
   RepoRecord,
   ResetBranchInput,
   RestoreRevisionInput,
   RevisionSummary,
+  StorageEstimate,
   StoredRevision,
   UpdateBranchInput,
   WriteHeadInput,
@@ -53,7 +60,16 @@ interface InMemoryRepositoryStore<TState> {
   heads: Map<string, Head<TState>>;
   revisions: Map<number, StoredRevision<TState>>;
   tags: Map<string, TagRecord>;
+  blobs: Map<string, InMemoryBlobRecord>;
 }
+
+interface InMemoryBlobRecord {
+  readonly blobRef: string;
+  readonly bytes: number;
+}
+
+type SkippedGarbageCollectionBlob =
+  GarbageCollectionRunResult["skippedBlobs"][number];
 
 export interface InMemoryPersistenceOptions {
   readonly now?: () => string;
@@ -155,6 +171,17 @@ export function inMemoryPersistence<TState>(
     return branch;
   }
 
+  function storeSnapshotBlob(
+    store: InMemoryRepositoryStore<TState>,
+    blobRef: string,
+    state: TState
+  ): void {
+    store.blobs.set(blobRef, {
+      blobRef,
+      bytes: byteLength(stableStringify(state))
+    });
+  }
+
   return {
     async getRepo(input: GetRepoInput): Promise<RepoRecord | null> {
       return cloneOrNull(stores.get(input.repoId)?.repo ?? null);
@@ -186,12 +213,14 @@ export function inMemoryPersistence<TState>(
       const branches = new Map<string, BranchRecord>();
       const heads = new Map<string, Head<TState>>();
       const tags = new Map<string, TagRecord>();
+      const blobs = new Map<string, InMemoryBlobRecord>();
       const store: InMemoryRepositoryStore<TState> = {
         repo,
         branches,
         heads,
         revisions,
-        tags
+        tags,
+        blobs
       };
 
       let revision: RevisionRecord | undefined;
@@ -217,6 +246,7 @@ export function inMemoryPersistence<TState>(
           revision,
           state: cloneJson(input.initialState)
         });
+        storeSnapshotBlob(store, input.stateHash, input.initialState);
       }
 
       const headRevision = revision?.revision ?? null;
@@ -371,6 +401,7 @@ export function inMemoryPersistence<TState>(
         revision,
         state: cloneJson(input.state)
       });
+      storeSnapshotBlob(store, input.stateHash, input.state);
       store.repo = {
         ...store.repo,
         schemaVersion: input.schemaVersion ?? store.repo.schemaVersion,
@@ -487,6 +518,7 @@ export function inMemoryPersistence<TState>(
             revision: revisionRecord,
             state: cloneJson(head.state)
           });
+          storeSnapshotBlob(store, head.stateHash, head.state);
           store.repo = {
             ...store.repo,
             nextRevision: revisionNumber + 1,
@@ -559,6 +591,97 @@ export function inMemoryPersistence<TState>(
         deleted: true,
         name: input.name,
         previousRevision: tag.revision
+      };
+    },
+
+    async runGarbageCollection(
+      input: PersistenceRunGarbageCollectionInput
+    ): Promise<GarbageCollectionRunResult> {
+      const startedAt = now();
+      const store = getStore(input.repoId);
+      const currentRefsSnapshotHash = await hashState(
+        buildRefsSnapshot(store)
+      );
+      if (currentRefsSnapshotHash !== input.plan.refsSnapshotHash) {
+        throw new GarbageCollectionPlanStaleError(
+          "Garbage collection plan is stale. Recompute the plan before running it."
+        );
+      }
+
+      const dryRun = input.dryRun ?? false;
+      if (dryRun) {
+        return {
+          planId: input.plan.planId,
+          repoId: input.repoId,
+          dryRun: true,
+          deletedRevisions: [],
+          deletedBlobs: [],
+          skippedRevisions: input.plan.blockedRevisions,
+          skippedBlobs: [],
+          freedStorageEstimate: zeroStorageEstimate(),
+          startedAt,
+          completedAt: now()
+        };
+      }
+
+      const deletedRevisions: number[] = [];
+      const skippedRevisions: BlockedRevision[] = [
+        ...input.plan.blockedRevisions
+      ];
+      for (const revision of input.plan.deletableRevisions) {
+        if (!store.revisions.has(revision.revision)) {
+          skippedRevisions.push({
+            revision: revision.revision,
+            reasons: ["missing-metadata"]
+          });
+          continue;
+        }
+        store.revisions.delete(revision.revision);
+        deletedRevisions.push(revision.revision);
+      }
+
+      const candidateBlobRefs = new Set<string>([
+        ...input.plan.orphanBlobs.map(blob => blob.blobRef),
+        ...input.plan.deletableRevisions.flatMap(revision =>
+          revision.snapshotBlobRef === undefined
+            ? []
+            : [revision.snapshotBlobRef]
+        )
+      ]);
+      const liveBlobRefs = collectLiveBlobRefs(store);
+      const deletedBlobs: string[] = [];
+      const skippedBlobs: SkippedGarbageCollectionBlob[] = [];
+
+      for (const blobRef of Array.from(candidateBlobRefs).sort()) {
+        if (!store.blobs.has(blobRef)) {
+          skippedBlobs.push({
+            blobRef,
+            reason: "missing"
+          });
+          continue;
+        }
+        if (liveBlobRefs.has(blobRef)) {
+          skippedBlobs.push({
+            blobRef,
+            reason: "still-referenced"
+          });
+          continue;
+        }
+        store.blobs.delete(blobRef);
+        deletedBlobs.push(blobRef);
+      }
+
+      return {
+        planId: input.plan.planId,
+        repoId: input.repoId,
+        dryRun: false,
+        deletedRevisions,
+        deletedBlobs,
+        skippedRevisions,
+        skippedBlobs,
+        freedStorageEstimate: input.plan.estimatedFreedStorage,
+        startedAt,
+        completedAt: now()
       };
     },
 
@@ -720,4 +843,65 @@ export const memoryPersistence = inMemoryPersistence;
 
 function cloneOrNull<TValue>(value: TValue | null): TValue | null {
   return value === null ? null : cloneJson(value);
+}
+
+function buildRefsSnapshot<TState>(
+  store: InMemoryRepositoryStore<TState>
+): GarbageCollectionRefsSnapshot {
+  const revisions = Array.from(store.revisions.values()).map(
+    storedRevision => storedRevision.revision.revision
+  );
+  const latestRevision =
+    revisions.length === 0 ? null : Math.max(...revisions);
+
+  return {
+    tags: Array.from(store.tags.values())
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(tag => ({
+        name: tag.name,
+        revision: tag.revision
+      })),
+    branches: Array.from(store.branches.values())
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(branch => ({
+        name: branch.name,
+        headRevision: branch.headRevision,
+        baseRevision: branch.baseRevision,
+        status: branch.status,
+        ...(branch.headBlobRef === undefined
+          ? {}
+          : { headBlobRef: branch.headBlobRef })
+      })),
+    latestRevision
+  };
+}
+
+function collectLiveBlobRefs<TState>(
+  store: InMemoryRepositoryStore<TState>
+): Set<string> {
+  const refs = new Set<string>();
+  for (const storedRevision of store.revisions.values()) {
+    if (storedRevision.revision.snapshotRef !== undefined) {
+      refs.add(storedRevision.revision.snapshotRef);
+    }
+  }
+  for (const branch of store.branches.values()) {
+    if (branch.headBlobRef !== undefined) {
+      refs.add(branch.headBlobRef);
+    }
+    refs.add(branch.headStateHash);
+  }
+  return refs;
+}
+
+function zeroStorageEstimate(): StorageEstimate {
+  return {
+    bytes: 0,
+    documents: 0,
+    blobs: 0
+  };
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }

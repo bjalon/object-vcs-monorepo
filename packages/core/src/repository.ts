@@ -3,6 +3,7 @@ import {
   DirtyHeadError,
   EntityAlreadyExistsError,
   EntityNotFoundError,
+  GarbageCollectionPlanStaleError,
   PersistenceError,
   RevisionNotFoundError,
   SchemaCompatibilityError,
@@ -38,11 +39,13 @@ import type {
   GarbageCollectableBlob,
   GarbageCollectionPlan,
   GarbageCollectionRefsSnapshot,
+  GarbageCollectionRunResult,
   PersistenceAdapter,
   PlanGarbageCollectionOptions,
   ProtectedRevisionReason,
   RequiredGarbageCollectionPlanOptions,
   RevisionSummary,
+  RunGarbageCollectionOptions,
   StorageEstimate,
   Unsubscribe
 } from "./persistence.js";
@@ -229,6 +232,10 @@ export interface ObjectVcsRepository<TState> {
   planGarbageCollection(
     options?: PlanGarbageCollectionOptions
   ): Promise<GarbageCollectionPlan>;
+  runGarbageCollection(
+    plan: GarbageCollectionPlan,
+    options?: RunGarbageCollectionOptions
+  ): Promise<GarbageCollectionRunResult>;
   listBranches(): Promise<BranchRecord[]>;
   createBranch(
     name: BranchName,
@@ -1046,6 +1053,40 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       });
     },
 
+    async runGarbageCollection(
+      plan: GarbageCollectionPlan,
+      runOptions: RunGarbageCollectionOptions = {}
+    ): Promise<GarbageCollectionRunResult> {
+      if (plan.repoId !== options.repoId) {
+        throw new PersistenceError(
+          `Garbage collection plan belongs to repository "${plan.repoId}", not "${options.repoId}".`
+        );
+      }
+      if (options.persistence.runGarbageCollection === undefined) {
+        throw new PersistenceError(
+          "Persistence adapter does not support runGarbageCollection."
+        );
+      }
+
+      const recomputedPlan = await repository.planGarbageCollection(
+        planOptionsFromRequiredOptions(plan.options)
+      );
+      if (recomputedPlan.refsSnapshotHash !== plan.refsSnapshotHash) {
+        throw new GarbageCollectionPlanStaleError(
+          "Garbage collection plan is stale. Recompute the plan before running it."
+        );
+      }
+
+      return options.persistence.runGarbageCollection({
+        repoId: options.repoId,
+        plan: recomputedPlan,
+        dryRun: runOptions.dryRun ?? false,
+        recomputeBeforeRun: true,
+        allowStalePlan: false,
+        ...(runOptions.author === undefined ? {} : { author: runOptions.author })
+      });
+    },
+
     async listBranches(): Promise<BranchRecord[]> {
       return options.persistence.listBranches({
         repoId: options.repoId
@@ -1156,6 +1197,25 @@ function normalizeGarbageCollectionPlanOptions(
     ),
     maxRevisionsToDelete: options.maxRevisionsToDelete ?? null,
     estimateStorage: options.estimateStorage ?? true
+  };
+}
+
+function planOptionsFromRequiredOptions(
+  options: RequiredGarbageCollectionPlanOptions
+): PlanGarbageCollectionOptions {
+  return {
+    ...(options.beforeRevision === null
+      ? {}
+      : { beforeRevision: options.beforeRevision }),
+    keepTagged: true,
+    keepBranchHeads: true,
+    keepDirtyBaseRevisions: true,
+    includeOrphanBlobs: options.includeOrphanBlobs,
+    protectRevisions: options.protectRevisions,
+    ...(options.maxRevisionsToDelete === null
+      ? {}
+      : { maxRevisionsToDelete: options.maxRevisionsToDelete }),
+    estimateStorage: options.estimateStorage
   };
 }
 
