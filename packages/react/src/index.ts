@@ -547,6 +547,10 @@ export function RevisionTimeline<TState = unknown>(
     () => groupBranchesByRevision(branches),
     [branches]
   );
+  const graphByRevision = useMemo(
+    () => buildRevisionGraph(revisions),
+    [revisions]
+  );
 
   return createElement(
     "section",
@@ -586,7 +590,10 @@ export function RevisionTimeline<TState = unknown>(
             createRevisionItem({
               revision,
               index,
-              isLast: index === revisions.length - 1,
+              graph: graphByRevision.get(revision.revision) ?? {
+                text: "*",
+                title: "revision"
+              },
               tags: tagsByRevision.get(revision.revision) ?? [],
               branches: branchesByRevision.get(revision.revision) ?? [],
               head,
@@ -735,10 +742,126 @@ function groupBranchesByRevision(
   return grouped;
 }
 
+interface RevisionGraphCell {
+  readonly text: string;
+  readonly title: string;
+}
+
+interface BranchRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+interface BranchConnection {
+  readonly childBranch: BranchName;
+  readonly parentBranch: BranchName;
+  readonly parentIndex: number;
+}
+
+function buildRevisionGraph(
+  revisions: readonly RevisionSummary[]
+): ReadonlyMap<RevisionNumber, RevisionGraphCell> {
+  const revisionIndex = new Map<RevisionNumber, number>();
+  const revisionByNumber = new Map<RevisionNumber, RevisionSummary>();
+  const branchRows = new Map<BranchName, number[]>();
+  const lanes: BranchName[] = [];
+
+  revisions.forEach((revision, index) => {
+    revisionIndex.set(revision.revision, index);
+    revisionByNumber.set(revision.revision, revision);
+
+    if (!branchRows.has(revision.branchName)) {
+      branchRows.set(revision.branchName, []);
+      lanes.push(revision.branchName);
+    }
+
+    branchRows.get(revision.branchName)?.push(index);
+  });
+
+  const laneByBranch = new Map<BranchName, number>(
+    lanes.map((branchName, index) => [branchName, index])
+  );
+  const ranges = new Map<BranchName, BranchRange>();
+  const connections: BranchConnection[] = [];
+
+  for (const [branchName, rows] of branchRows.entries()) {
+    const branchStart = Math.min(...rows);
+    const branchLastOwnRow = Math.max(...rows);
+    let branchEnd = branchLastOwnRow;
+
+    for (const row of rows) {
+      const revision = revisions[row];
+      if (revision === undefined || revision.parentRevision === null) {
+        continue;
+      }
+
+      const parent = revisionByNumber.get(revision.parentRevision);
+      const parentIndex = revisionIndex.get(revision.parentRevision);
+      if (
+        parent === undefined ||
+        parentIndex === undefined ||
+        parent.branchName === revision.branchName
+      ) {
+        continue;
+      }
+
+      connections.push({
+        childBranch: revision.branchName,
+        parentBranch: parent.branchName,
+        parentIndex
+      });
+      branchEnd = Math.max(branchEnd, parentIndex);
+    }
+
+    ranges.set(branchName, {
+      start: branchStart,
+      end: branchEnd
+    });
+  }
+
+  const graph = new Map<RevisionNumber, RevisionGraphCell>();
+
+  revisions.forEach((revision, index) => {
+    const currentLane = laneByBranch.get(revision.branchName) ?? 0;
+    const cells: string[] = lanes.map(branchName => {
+      const range = ranges.get(branchName);
+      return range !== undefined && index >= range.start && index <= range.end
+        ? "│"
+        : " ";
+    });
+
+    for (const connection of connections.filter(item => item.parentIndex === index)) {
+      const childLane = laneByBranch.get(connection.childBranch);
+      const parentLane = laneByBranch.get(connection.parentBranch);
+      if (childLane === undefined || parentLane === undefined) {
+        continue;
+      }
+
+      const minLane = Math.min(childLane, parentLane);
+      const maxLane = Math.max(childLane, parentLane);
+      for (let lane = minLane + 1; lane < maxLane; lane += 1) {
+        cells[lane] = "─";
+      }
+      cells[childLane] = childLane < parentLane ? "╰" : "╯";
+    }
+
+    cells[currentLane] = "*";
+    graph.set(revision.revision, {
+      text: cells.join(" "),
+      title:
+        revision.parentRevision === null
+          ? `${revision.branchName}: root revision`
+          : `${revision.branchName}: parent #${revision.parentRevision}`
+    });
+  });
+
+  return graph;
+}
+
 function createRevisionItem<TState>(input: {
   readonly revision: RevisionSummary;
   readonly index: number;
-  readonly isLast: boolean;
+  readonly graph: RevisionGraphCell;
   readonly tags: readonly TagRecord[];
   readonly branches: readonly BranchRecord[];
   readonly head: Head<TState> | null;
@@ -758,6 +881,10 @@ function createRevisionItem<TState>(input: {
     input.head.baseRevision === input.revision.revision;
   const shortHash = input.revision.stateHash.replace(/^sha256:/, "").slice(0, 8);
   const message = input.revision.message ?? "Checkpoint";
+  const parentText =
+    input.revision.parentRevision === null
+      ? "root"
+      : `parent #${input.revision.parentRevision}`;
   const refs = [
     ...input.branches.map(branch => ({
       key: `branch:${branch.name}`,
@@ -799,21 +926,13 @@ function createRevisionItem<TState>(input: {
       "div",
       { style: timelineStyles.graphRow },
       createElement(
-        "div",
+        "pre",
         {
           "aria-hidden": true,
+          title: input.graph.title,
           style: timelineStyles.graphCell
         },
-        createElement(
-          "span",
-          {
-            style: input.isLast
-              ? timelineStyles.graphLineLast
-              : timelineStyles.graphLine
-          },
-          "|"
-        ),
-        createElement("span", { style: timelineStyles.graphDot }, "*")
+        input.graph.text
       ),
       createElement(
         "button",
@@ -831,6 +950,7 @@ function createRevisionItem<TState>(input: {
           { style: timelineStyles.oneline },
           createElement("span", { style: timelineStyles.revisionNumber }, `#${input.revision.revision}`),
           createElement("span", { style: timelineStyles.shortHash }, shortHash),
+          createElement("span", { style: timelineStyles.parentRef }, parentText),
           createElement("span", { style: timelineStyles.message }, message)
         ),
         refs.length === 0
@@ -948,38 +1068,22 @@ const timelineStyles = {
   },
   graphRow: {
     display: "grid",
-    gridTemplateColumns: "26px minmax(0, 1fr) auto",
+    gridTemplateColumns: "max-content minmax(0, 1fr) auto",
     alignItems: "center",
     gap: 8,
     minWidth: 0
   },
   graphCell: {
-    alignSelf: "stretch",
-    color: "#475569",
-    display: "grid",
+    color: "#0f766e",
     fontFamily:
       "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    fontSize: 16,
-    justifyItems: "center",
-    lineHeight: 1,
-    position: "relative"
-  },
-  graphLine: {
-    color: "#cbd5e1",
-    insetBlock: -9,
-    position: "absolute"
-  },
-  graphLineLast: {
-    color: "#cbd5e1",
-    position: "absolute",
-    top: -9
-  },
-  graphDot: {
-    alignSelf: "center",
-    color: "#0f766e",
+    fontSize: 15,
     fontWeight: 800,
-    position: "relative",
-    zIndex: 1
+    lineHeight: 1,
+    margin: 0,
+    minWidth: 18,
+    overflow: "visible",
+    whiteSpace: "pre"
   },
   itemMain: {
     display: "flex",
@@ -1063,6 +1167,13 @@ const timelineStyles = {
     whiteSpace: "nowrap"
   },
   shortHash: {
+    color: "#64748b",
+    fontFamily:
+      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: 12,
+    whiteSpace: "nowrap"
+  },
+  parentRef: {
     color: "#64748b",
     fontFamily:
       "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",

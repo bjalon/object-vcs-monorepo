@@ -63,6 +63,23 @@ const revision: RevisionSummary = {
   isCheckpoint: true
 };
 
+const secondRevision: RevisionSummary = {
+  ...revision,
+  revision: 2,
+  parentRevision: 1,
+  message: "Main update",
+  stateHash: "sha256:two"
+};
+
+const featureRevision: RevisionSummary = {
+  ...revision,
+  revision: 3,
+  parentRevision: 1,
+  branchName: "feature",
+  message: "Feature branch",
+  stateHash: "sha256:three"
+};
+
 const branch: BranchRecord = {
   repoId: "repo",
   name: "main",
@@ -73,6 +90,14 @@ const branch: BranchRecord = {
   createdFromRevision: 1,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z"
+};
+
+const featureBranch: BranchRecord = {
+  ...branch,
+  name: "feature",
+  headRevision: 3,
+  baseRevision: 1,
+  headStateHash: "sha256:three"
 };
 
 const tag: TagRecord = {
@@ -149,6 +174,29 @@ describe("@bjalon/object-vcs-react", () => {
     expect(html).toContain("main");
     expect(html).toContain("v1");
     expect(html).toContain("Restore");
+  });
+
+  it("renders parent relationships in the revision graph", () => {
+    const repository = createRepositoryMock();
+
+    const html = renderToStaticMarkup(
+      createElement(
+        ObjectVcsProvider<TestState>,
+        { repository },
+        createElement(RevisionTimeline<TestState>, {
+          branch: "main",
+          revisions: [featureRevision, secondRevision, revision],
+          branches: [branch, featureBranch],
+          head,
+          selectedRevision: 3
+        })
+      )
+    );
+
+    expect(html).toContain("Feature branch");
+    expect(html).toContain("parent #1");
+    expect(html).toContain("feature");
+    expect(html).toContain("╰");
   });
 
   it("renders useCommit initial state", () => {
