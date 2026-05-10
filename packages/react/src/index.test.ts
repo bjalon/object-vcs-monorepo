@@ -132,7 +132,9 @@ describe("@bjalon/object-vcs-react", () => {
           branch: "main",
           revisions: [revision],
           tags: [tag],
+          branches: [branch],
           head: dirtyHead,
+          selectedRevision: 1,
           onRestoreRevision: () => {
             return;
           }
@@ -144,6 +146,7 @@ describe("@bjalon/object-vcs-react", () => {
     expect(html).toContain("HEAD dirty base #1");
     expect(html).toContain("#1");
     expect(html).toContain("Initial state");
+    expect(html).toContain("main");
     expect(html).toContain("v1");
     expect(html).toContain("Restore");
   });

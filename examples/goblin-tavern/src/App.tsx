@@ -426,7 +426,9 @@ function GoblinTavernApp() {
                 branch={activeBranch}
                 revisions={revisions}
                 tags={tags}
+                branches={branches}
                 head={head}
+                selectedRevision={selectedRevision?.revision ?? null}
                 loading={busy === "preview" || busy === "restore"}
                 error={undefined}
                 onSelectRevision={selectRevision}

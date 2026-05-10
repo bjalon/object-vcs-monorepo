@@ -100,7 +100,9 @@ export interface RevisionTimelineProps<TState = unknown> {
   readonly branch?: BranchName;
   readonly revisions?: readonly RevisionSummary[];
   readonly tags?: readonly TagRecord[];
+  readonly branches?: readonly BranchRecord[];
   readonly head?: Head<TState> | null;
+  readonly selectedRevision?: RevisionNumber | null;
   readonly loading?: boolean;
   readonly error?: unknown;
   readonly onSelectRevision?: (
@@ -519,19 +521,32 @@ export function RevisionTimeline<TState = unknown>(
     enabled: props.revisions === undefined
   });
   const tagsResult = useTags({ enabled: props.tags === undefined });
+  const branchesResult = useBranches({ enabled: props.branches === undefined });
   const headResult = useHead<TState>({
     ...(branch === undefined ? {} : { branch }),
     enabled: props.head === undefined
   });
   const revisions = props.revisions ?? revisionsResult.revisions;
   const tags = props.tags ?? tagsResult.tags;
+  const branches = props.branches ?? branchesResult.branches;
   const head = props.head === undefined ? headResult.head : props.head;
   const loading =
     props.loading ??
-    (revisionsResult.loading || tagsResult.loading || headResult.loading);
+    (revisionsResult.loading ||
+      tagsResult.loading ||
+      branchesResult.loading ||
+      headResult.loading);
   const error =
-    props.error ?? revisionsResult.error ?? tagsResult.error ?? headResult.error;
+    props.error ??
+    revisionsResult.error ??
+    tagsResult.error ??
+    branchesResult.error ??
+    headResult.error;
   const tagsByRevision = useMemo(() => groupTagsByRevision(tags), [tags]);
+  const branchesByRevision = useMemo(
+    () => groupBranchesByRevision(branches),
+    [branches]
+  );
 
   return createElement(
     "section",
@@ -567,11 +582,19 @@ export function RevisionTimeline<TState = unknown>(
       : createElement(
           "ol",
           { style: timelineStyles.list },
-          revisions.map(revision =>
+          revisions.map((revision, index) =>
             createRevisionItem({
               revision,
+              index,
+              isLast: index === revisions.length - 1,
               tags: tagsByRevision.get(revision.revision) ?? [],
+              branches: branchesByRevision.get(revision.revision) ?? [],
               head,
+              selected:
+                props.selectedRevision === revision.revision ||
+                (props.selectedRevision === undefined &&
+                  head?.status === "clean" &&
+                  head.headRevision === revision.revision),
               onSelectRevision: props.onSelectRevision,
               onRestoreRevision: props.onRestoreRevision
             })
@@ -694,10 +717,32 @@ function groupTagsByRevision(
   return grouped;
 }
 
+function groupBranchesByRevision(
+  branches: readonly BranchRecord[]
+): ReadonlyMap<RevisionNumber, readonly BranchRecord[]> {
+  const grouped = new Map<RevisionNumber, BranchRecord[]>();
+
+  for (const branch of branches) {
+    if (branch.headRevision === null) {
+      continue;
+    }
+
+    const existing = grouped.get(branch.headRevision) ?? [];
+    existing.push(branch);
+    grouped.set(branch.headRevision, existing);
+  }
+
+  return grouped;
+}
+
 function createRevisionItem<TState>(input: {
   readonly revision: RevisionSummary;
+  readonly index: number;
+  readonly isLast: boolean;
   readonly tags: readonly TagRecord[];
+  readonly branches: readonly BranchRecord[];
   readonly head: Head<TState> | null;
+  readonly selected: boolean;
   readonly onSelectRevision:
     | ((revision: RevisionSummary) => void | Promise<void>)
     | undefined;
@@ -711,16 +756,65 @@ function createRevisionItem<TState>(input: {
   const isBaseRevision =
     input.head?.status === "dirty" &&
     input.head.baseRevision === input.revision.revision;
+  const shortHash = input.revision.stateHash.replace(/^sha256:/, "").slice(0, 8);
+  const message = input.revision.message ?? "Checkpoint";
+  const refs = [
+    ...input.branches.map(branch => ({
+      key: `branch:${branch.name}`,
+      label: branch.name,
+      style: timelineStyles.branchPill
+    })),
+    ...input.tags.map(tag => ({
+      key: `tag:${tag.name}`,
+      label: tag.name,
+      style: timelineStyles.tagPill
+    })),
+    ...(isHeadRevision
+      ? [
+          {
+            key: "head",
+            label: "HEAD",
+            style: timelineStyles.headPill
+          }
+        ]
+      : []),
+    ...(isBaseRevision
+      ? [
+          {
+            key: "base",
+            label: "BASE",
+            style: timelineStyles.basePill
+          }
+        ]
+      : [])
+  ];
 
   return createElement(
     "li",
     {
       key: input.revision.revision,
-      style: timelineStyles.item
+      style: input.selected ? timelineStyles.selectedItem : timelineStyles.item
     },
     createElement(
       "div",
-      { style: timelineStyles.itemMain },
+      { style: timelineStyles.graphRow },
+      createElement(
+        "div",
+        {
+          "aria-hidden": true,
+          style: timelineStyles.graphCell
+        },
+        createElement(
+          "span",
+          {
+            style: input.isLast
+              ? timelineStyles.graphLineLast
+              : timelineStyles.graphLine
+          },
+          "|"
+        ),
+        createElement("span", { style: timelineStyles.graphDot }, "*")
+      ),
       createElement(
         "button",
         {
@@ -728,21 +822,49 @@ function createRevisionItem<TState>(input: {
           onClick: () => {
             void input.onSelectRevision?.(input.revision);
           },
-          style: timelineStyles.revisionButton
+          style: input.selected
+            ? timelineStyles.selectedRevisionLine
+            : timelineStyles.revisionLine
         },
-        `#${input.revision.revision}`
+        createElement(
+          "span",
+          { style: timelineStyles.oneline },
+          createElement("span", { style: timelineStyles.revisionNumber }, `#${input.revision.revision}`),
+          createElement("span", { style: timelineStyles.shortHash }, shortHash),
+          createElement("span", { style: timelineStyles.message }, message)
+        ),
+        refs.length === 0
+          ? null
+          : createElement(
+              "span",
+              { style: timelineStyles.refs },
+              refs.map(ref =>
+                createElement(
+                  "span",
+                  {
+                    key: ref.key,
+                    style: ref.style
+                  },
+                  ref.label
+                )
+              )
+            )
       ),
-      createElement(
-        "span",
-        { style: timelineStyles.message },
-        input.revision.message ?? "Checkpoint"
-      ),
-      isHeadRevision
-        ? createElement("span", { style: timelineStyles.badge }, "HEAD")
-        : null,
-      isBaseRevision
-        ? createElement("span", { style: timelineStyles.badge }, "BASE")
-        : null
+      input.onRestoreRevision === undefined
+        ? null
+        : createElement(
+            "button",
+            {
+              type: "button",
+              onClick: () => {
+                void input.onRestoreRevision?.(input.revision, {
+                  commit: false
+                });
+              },
+              style: timelineStyles.restoreButton
+            },
+            "Restore"
+          )
     ),
     createElement(
       "div",
@@ -751,38 +873,7 @@ function createRevisionItem<TState>(input: {
       input.revision.createdBy === undefined
         ? null
         : ` · ${input.revision.createdBy}`
-    ),
-    input.tags.length === 0
-      ? null
-      : createElement(
-          "div",
-          { style: timelineStyles.tags },
-          input.tags.map(tag =>
-            createElement(
-              "span",
-              {
-                key: tag.name,
-                style: timelineStyles.tag
-              },
-              tag.name
-            )
-          )
-        ),
-    input.onRestoreRevision === undefined
-      ? null
-      : createElement(
-          "button",
-          {
-            type: "button",
-            onClick: () => {
-              void input.onRestoreRevision?.(input.revision, {
-                commit: false
-              });
-            },
-            style: timelineStyles.restoreButton
-          },
-          "Restore"
-        )
+    )
   );
 }
 
@@ -841,10 +932,54 @@ const timelineStyles = {
   item: {
     display: "grid",
     gap: 6,
-    border: "1px solid #d1d5db",
+    border: "1px solid #d8dee9",
     borderRadius: 8,
-    padding: 10,
+    padding: "8px 10px",
     background: "#ffffff"
+  },
+  selectedItem: {
+    display: "grid",
+    gap: 6,
+    border: "1px solid #0f766e",
+    borderRadius: 8,
+    padding: "8px 10px",
+    background: "#ecfdf5",
+    boxShadow: "0 1px 2px rgb(15 118 110 / 18%)"
+  },
+  graphRow: {
+    display: "grid",
+    gridTemplateColumns: "26px minmax(0, 1fr) auto",
+    alignItems: "center",
+    gap: 8,
+    minWidth: 0
+  },
+  graphCell: {
+    alignSelf: "stretch",
+    color: "#475569",
+    display: "grid",
+    fontFamily:
+      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: 16,
+    justifyItems: "center",
+    lineHeight: 1,
+    position: "relative"
+  },
+  graphLine: {
+    color: "#cbd5e1",
+    insetBlock: -9,
+    position: "absolute"
+  },
+  graphLineLast: {
+    color: "#cbd5e1",
+    position: "absolute",
+    top: -9
+  },
+  graphDot: {
+    alignSelf: "center",
+    color: "#0f766e",
+    fontWeight: 800,
+    position: "relative",
+    zIndex: 1
   },
   itemMain: {
     display: "flex",
@@ -856,6 +991,7 @@ const timelineStyles = {
     border: "1px solid #9ca3af",
     borderRadius: 6,
     background: "#f9fafb",
+    color: "#111827",
     padding: "4px 8px",
     cursor: "pointer",
     font: "inherit"
@@ -874,9 +1010,64 @@ const timelineStyles = {
     border: "1px solid #9ca3af",
     borderRadius: 6,
     background: "#ffffff",
+    color: "#334155",
     padding: "4px 8px",
     cursor: "pointer",
     font: "inherit"
+  },
+  revisionLine: {
+    alignItems: "center",
+    background: "transparent",
+    border: "0",
+    borderRadius: 6,
+    color: "#111827",
+    cursor: "pointer",
+    display: "flex",
+    flexWrap: "wrap",
+    font: "inherit",
+    gap: 8,
+    justifyContent: "space-between",
+    minHeight: 34,
+    minWidth: 0,
+    padding: "5px 6px",
+    textAlign: "left"
+  },
+  selectedRevisionLine: {
+    alignItems: "center",
+    background: "#d1fae5",
+    border: "0",
+    borderRadius: 6,
+    color: "#064e3b",
+    cursor: "pointer",
+    display: "flex",
+    flexWrap: "wrap",
+    font: "inherit",
+    gap: 8,
+    justifyContent: "space-between",
+    minHeight: 34,
+    minWidth: 0,
+    padding: "5px 6px",
+    textAlign: "left"
+  },
+  oneline: {
+    alignItems: "center",
+    display: "flex",
+    gap: 8,
+    minWidth: 0
+  },
+  revisionNumber: {
+    color: "#0f766e",
+    fontFamily:
+      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontWeight: 800,
+    whiteSpace: "nowrap"
+  },
+  shortHash: {
+    color: "#64748b",
+    fontFamily:
+      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: 12,
+    whiteSpace: "nowrap"
   },
   message: {
     overflow: "hidden",
@@ -892,6 +1083,12 @@ const timelineStyles = {
     flexWrap: "wrap",
     gap: 4
   },
+  refs: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 4,
+    justifyContent: "flex-end"
+  },
   tag: {
     border: "1px solid #cbd5e1",
     borderRadius: 6,
@@ -899,6 +1096,42 @@ const timelineStyles = {
     background: "#f8fafc",
     color: "#334155",
     fontSize: 12
+  },
+  tagPill: {
+    border: "1px solid #fde68a",
+    borderRadius: 999,
+    padding: "2px 7px",
+    background: "#fffbeb",
+    color: "#92400e",
+    fontSize: 12,
+    fontWeight: 700
+  },
+  branchPill: {
+    border: "1px solid #99f6e4",
+    borderRadius: 999,
+    padding: "2px 7px",
+    background: "#f0fdfa",
+    color: "#0f766e",
+    fontSize: 12,
+    fontWeight: 700
+  },
+  headPill: {
+    border: "1px solid #bfdbfe",
+    borderRadius: 999,
+    padding: "2px 7px",
+    background: "#eff6ff",
+    color: "#1d4ed8",
+    fontSize: 12,
+    fontWeight: 800
+  },
+  basePill: {
+    border: "1px solid #fed7aa",
+    borderRadius: 999,
+    padding: "2px 7px",
+    background: "#fff7ed",
+    color: "#c2410c",
+    fontSize: 12,
+    fontWeight: 800
   },
   badge: {
     border: "1px solid #bfdbfe",
