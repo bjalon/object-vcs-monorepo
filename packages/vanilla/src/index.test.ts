@@ -31,6 +31,8 @@ const revision: RevisionSummary = {
   stateHash: "sha256:one",
   schemaVersion: 1,
   graphVersion: "test",
+  schemaFingerprint: "manual:test",
+  schemaFingerprintAlgorithm: "manual",
   message: "Initial <script>",
   createdAt: "2026-01-01T00:00:00.000Z",
   isEmptyRevision: false,

@@ -19,6 +19,7 @@ import {
   type GetBranchInput,
   type GetHeadInput,
   type GetRepoInput,
+  type GraphIdentity,
   type Head,
   type ListBranchesInput,
   type ListRevisionsInput,
@@ -75,6 +76,8 @@ export interface RepoDto {
   readonly repoId: string;
   readonly schemaVersion: number;
   readonly graphVersion: string;
+  readonly schemaFingerprint: string;
+  readonly schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   readonly defaultBranch: string;
   readonly storageMode: StorageModeDto;
   readonly nextRevision: number;
@@ -102,6 +105,8 @@ export interface CreateRepoRequest<TState = unknown> {
   readonly repoId: string;
   readonly schemaVersion: number;
   readonly graphVersion: string;
+  readonly schemaFingerprint: string;
+  readonly schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   readonly defaultBranch?: string;
   readonly storageMode?: StorageModeDto;
   readonly initialState: TState;
@@ -158,6 +163,7 @@ export interface WriteHeadResponse<TState = unknown> {
 export interface CommitRequest<TState = unknown> {
   readonly state?: TState;
   readonly stateHash?: string;
+  readonly graphIdentity?: GraphIdentity;
   readonly message?: string;
   readonly author?: string;
   readonly allowEmpty?: boolean;
@@ -275,6 +281,8 @@ export function httpPersistence<TState>(
           repoId: input.repoId,
           schemaVersion: input.schemaVersion,
           graphVersion: input.graphVersion,
+          schemaFingerprint: input.schemaFingerprint,
+          schemaFingerprintAlgorithm: input.schemaFingerprintAlgorithm,
           defaultBranch: input.defaultBranch,
           storageMode: input.storageMode,
           initialState: input.initialState,
@@ -366,7 +374,10 @@ export function httpPersistence<TState>(
             : { allowEmpty: input.allowEmpty }),
           ...(input.expectedHeadHash === undefined
             ? {}
-            : { expectedHeadHash: input.expectedHeadHash })
+            : { expectedHeadHash: input.expectedHeadHash }),
+          ...(input.graphIdentity === undefined
+            ? {}
+            : { graphIdentity: input.graphIdentity })
         }
       });
 

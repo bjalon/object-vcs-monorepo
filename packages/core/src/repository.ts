@@ -5,6 +5,7 @@ import {
   EntityNotFoundError,
   PersistenceError,
   RevisionNotFoundError,
+  SchemaCompatibilityError,
   ValidationError
 } from "./errors.js";
 import type {
@@ -15,12 +16,14 @@ import type {
   ObjectVcsGraph,
   SingletonGraphEntry
 } from "./graph.js";
-import { hashState } from "./hash.js";
+import { hashState, stableStringify } from "./hash.js";
 import { cloneJson } from "./json.js";
 import { migrateState, type StateMigration } from "./migrations.js";
+import { resolveGraphIdentity } from "./schema-fingerprint.js";
 import type {
   BranchRecord,
   BranchName,
+  GraphIdentity,
   Head,
   RepositoryId,
   RevisionNumber,
@@ -39,6 +42,8 @@ export interface CreateRepositoryOptions<TGraph extends ObjectVcsGraph> {
   readonly graph: TGraph;
   readonly schemaVersion: number;
   readonly graphVersion?: string;
+  readonly schemaFingerprint?: string;
+  readonly schemaFingerprintAlgorithm?: GraphIdentity["schemaFingerprintAlgorithm"];
   readonly migrations?: readonly StateMigration[];
   readonly defaultBranch?: BranchName;
   readonly persistence: PersistenceAdapter<InferState<TGraph>>;
@@ -59,7 +64,7 @@ export interface InitResult<TState> {
 
 export interface GetHeadOptions {
   readonly branch?: BranchName;
-  readonly migrateTo?: string;
+  readonly migrateTo?: "raw" | "current" | "strict" | string;
 }
 
 export interface UpdateOptions {
@@ -92,7 +97,7 @@ export interface CommitResult<TState> {
 }
 
 export interface ReadRevisionOptions {
-  readonly migrateTo?: string;
+  readonly migrateTo?: "raw" | "current" | "strict" | string;
   readonly migration?: "latest" | "strict";
 }
 
@@ -142,7 +147,38 @@ export interface MigrateHeadOptions {
   readonly expectedHeadHash?: StateHash;
 }
 
+export type GraphCompatibilityResult =
+  | {
+      readonly status: "compatible";
+      readonly graphVersion: string;
+      readonly schemaFingerprint: string;
+    }
+  | {
+      readonly status: "migration-required";
+      readonly fromGraphVersion: string;
+      readonly toGraphVersion: string;
+      readonly fromSchemaFingerprint: string;
+      readonly toSchemaFingerprint: string;
+    }
+  | {
+      readonly status: "incompatible";
+      readonly reason: string;
+      readonly fromGraphVersion: string;
+      readonly toGraphVersion: string;
+      readonly fromSchemaFingerprint: string;
+      readonly toSchemaFingerprint: string;
+    };
+
+export interface AssertCompatibleGraphOptions {
+  readonly revision?: RevisionNumber;
+  readonly branch?: BranchName;
+}
+
 export interface ObjectVcsRepository<TState> {
+  getGraphIdentity(): GraphIdentity;
+  assertCompatibleGraph(
+    options?: AssertCompatibleGraphOptions
+  ): Promise<GraphCompatibilityResult>;
   init(options: InitOptions<TState>): Promise<InitResult<TState>>;
   getHead(options?: GetHeadOptions): Promise<Head<TState>>;
   watchHead(
@@ -263,6 +299,16 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
   let activeBranch = options.defaultBranch ?? "main";
   const defaultBranch = options.defaultBranch ?? "main";
   const graphVersion = options.graphVersion ?? "1";
+  const graphIdentity = resolveGraphIdentity({
+    graph: options.graph,
+    graphVersion,
+    ...(options.schemaFingerprint === undefined
+      ? {}
+      : { schemaFingerprint: options.schemaFingerprint }),
+    ...(options.schemaFingerprintAlgorithm === undefined
+      ? {}
+      : { schemaFingerprintAlgorithm: options.schemaFingerprintAlgorithm })
+  });
   const migrations = options.migrations ?? [];
 
   function resolveBranch(branch: BranchName | undefined): BranchName {
@@ -275,17 +321,17 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
 
   function resolveMigrationTarget(
     migrationOptions: ReadRevisionOptions | GetHeadOptions | undefined
-  ): string | null {
+  ): "raw" | "current" | "strict" | string | null {
     const requestedTarget = migrationOptions?.migrateTo;
     if (requestedTarget !== undefined) {
-      return requestedTarget === "current" ? graphVersion : requestedTarget;
+      return requestedTarget;
     }
 
     if (
       "migration" in (migrationOptions ?? {}) &&
       (migrationOptions as ReadRevisionOptions).migration === "latest"
     ) {
-      return graphVersion;
+      return "current";
     }
 
     return null;
@@ -302,7 +348,41 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     }
   }
 
-  async function readHeadGraphVersion(head: Head<TState>): Promise<string> {
+  function resolveTargetGraphVersion(
+    target: "current" | "strict" | string
+  ): string {
+    return target === "current" || target === "strict" ? graphVersion : target;
+  }
+
+  function hasMigrationPath(from: string, to: string): boolean {
+    if (from === to) {
+      return true;
+    }
+
+    const visited = new Set<string>([from]);
+    const queue = [from];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (current === undefined) {
+        break;
+      }
+
+      for (const migration of migrations) {
+        if (migration.from !== current || visited.has(migration.to)) {
+          continue;
+        }
+        if (migration.to === to) {
+          return true;
+        }
+        visited.add(migration.to);
+        queue.push(migration.to);
+      }
+    }
+
+    return false;
+  }
+
+  async function readHeadGraphIdentity(head: Head<TState>): Promise<GraphIdentity> {
     const sourceRevision = head.headRevision ?? head.baseRevision;
 
     if (sourceRevision !== null) {
@@ -315,7 +395,12 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
           `Revision "${sourceRevision}" was not found.`
         );
       }
-      return storedRevision.revision.graphVersion;
+      return {
+        graphVersion: storedRevision.revision.graphVersion,
+        schemaFingerprint: storedRevision.revision.schemaFingerprint,
+        schemaFingerprintAlgorithm:
+          storedRevision.revision.schemaFingerprintAlgorithm
+      };
     }
 
     const repo = await options.persistence.getRepo({ repoId: options.repoId });
@@ -324,7 +409,11 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         `Repository "${options.repoId}" was not found.`
       );
     }
-    return repo.graphVersion;
+    return {
+      graphVersion: repo.graphVersion,
+      schemaFingerprint: repo.schemaFingerprint,
+      schemaFingerprintAlgorithm: repo.schemaFingerprintAlgorithm
+    };
   }
 
   async function validateHead(
@@ -344,15 +433,35 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     }
 
     const targetGraphVersion = resolveMigrationTarget(getHeadOptions);
-    if (targetGraphVersion !== null) {
-      assertCurrentTarget(targetGraphVersion);
-      const sourceGraphVersion = await readHeadGraphVersion(head);
-      stateInput = migrateState({
-        state: stateInput,
-        from: sourceGraphVersion,
-        to: targetGraphVersion,
-        migrations
-      });
+    if (targetGraphVersion === "raw") {
+      return {
+        ...head,
+        state: cloneJson(stateInput) as TState
+      };
+    }
+
+    const sourceGraphIdentity = await readHeadGraphIdentity(head);
+    if (
+      targetGraphVersion === null ||
+      targetGraphVersion === "strict"
+    ) {
+      if (sourceGraphIdentity.schemaFingerprint !== graphIdentity.schemaFingerprint) {
+        throw new SchemaCompatibilityError(
+          `HEAD schema fingerprint "${sourceGraphIdentity.schemaFingerprint}" is not compatible with current "${graphIdentity.schemaFingerprint}".`
+        );
+      }
+    } else {
+      const resolvedTargetGraphVersion =
+        resolveTargetGraphVersion(targetGraphVersion);
+      assertCurrentTarget(resolvedTargetGraphVersion);
+      if (sourceGraphIdentity.graphVersion !== resolvedTargetGraphVersion) {
+        stateInput = migrateState({
+          state: stateInput,
+          from: sourceGraphIdentity.graphVersion,
+          to: resolvedTargetGraphVersion,
+          migrations
+        });
+      }
     }
 
     const state = validateState(stateInput);
@@ -401,23 +510,32 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     }
 
     const targetGraphVersion = resolveMigrationTarget(readRevisionOptions);
-    if (targetGraphVersion === null && revision.graphVersion !== graphVersion) {
-      throw new ValidationError("Revision graph version does not match repository graph.", [
-        {
-          path: ["graphVersion"],
-          message: `Read revision "${revision.revision}" with migrateTo: "current" or provide migrations from "${revision.graphVersion}" to "${graphVersion}".`
-        }
-      ]);
+    if (targetGraphVersion === "raw") {
+      stableStringify(stateInput);
+      return cloneJson(stateInput) as TState;
     }
 
-    if (targetGraphVersion !== null) {
-      assertCurrentTarget(targetGraphVersion);
-      nextStateInput = migrateState({
-        state: stateInput,
-        from: revision.graphVersion,
-        to: targetGraphVersion,
-        migrations
-      });
+    if (
+      (targetGraphVersion === null || targetGraphVersion === "strict") &&
+      revision.schemaFingerprint !== graphIdentity.schemaFingerprint
+    ) {
+      throw new SchemaCompatibilityError(
+        `Revision "${revision.revision}" schema fingerprint "${revision.schemaFingerprint}" is not compatible with current "${graphIdentity.schemaFingerprint}".`
+      );
+    }
+
+    if (targetGraphVersion !== null && targetGraphVersion !== "strict") {
+      const resolvedTargetGraphVersion =
+        resolveTargetGraphVersion(targetGraphVersion);
+      assertCurrentTarget(resolvedTargetGraphVersion);
+      if (revision.graphVersion !== resolvedTargetGraphVersion) {
+        nextStateInput = migrateState({
+          state: stateInput,
+          from: revision.graphVersion,
+          to: resolvedTargetGraphVersion,
+          migrations
+        });
+      }
     }
 
     const state = validateState(nextStateInput);
@@ -437,7 +555,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         repoId: options.repoId,
         branchName,
         schemaVersion: options.schemaVersion,
-        graphVersion,
+        graphIdentity,
         state,
         stateHash,
         ...(updateOptions.message === undefined
@@ -497,6 +615,73 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
   }
 
   const repository: ObjectVcsRepository<TState> = {
+    getGraphIdentity(): GraphIdentity {
+      return graphIdentity;
+    },
+
+    async assertCompatibleGraph(
+      compatibilityOptions: AssertCompatibleGraphOptions = {}
+    ): Promise<GraphCompatibilityResult> {
+      let sourceIdentity: GraphIdentity;
+
+      if (compatibilityOptions.revision !== undefined) {
+        const storedRevision = await options.persistence.readRevision({
+          repoId: options.repoId,
+          revision: compatibilityOptions.revision
+        });
+        if (storedRevision === null) {
+          throw new RevisionNotFoundError(
+            `Revision "${compatibilityOptions.revision}" was not found.`
+          );
+        }
+        sourceIdentity = {
+          graphVersion: storedRevision.revision.graphVersion,
+          schemaFingerprint: storedRevision.revision.schemaFingerprint,
+          schemaFingerprintAlgorithm:
+            storedRevision.revision.schemaFingerprintAlgorithm
+        };
+      } else {
+        const branchName = resolveBranch(compatibilityOptions.branch);
+        const head = await options.persistence.getHead({
+          repoId: options.repoId,
+          branchName
+        });
+        if (head === null) {
+          throw new BranchNotFoundError(
+            `HEAD for branch "${branchName}" was not found.`
+          );
+        }
+        sourceIdentity = await readHeadGraphIdentity(head);
+      }
+
+      if (sourceIdentity.schemaFingerprint === graphIdentity.schemaFingerprint) {
+        return {
+          status: "compatible",
+          graphVersion: sourceIdentity.graphVersion,
+          schemaFingerprint: sourceIdentity.schemaFingerprint
+        };
+      }
+
+      if (hasMigrationPath(sourceIdentity.graphVersion, graphIdentity.graphVersion)) {
+        return {
+          status: "migration-required",
+          fromGraphVersion: sourceIdentity.graphVersion,
+          toGraphVersion: graphIdentity.graphVersion,
+          fromSchemaFingerprint: sourceIdentity.schemaFingerprint,
+          toSchemaFingerprint: graphIdentity.schemaFingerprint
+        };
+      }
+
+      return {
+        status: "incompatible",
+        reason: "Schema fingerprints differ and no migration path is available.",
+        fromGraphVersion: sourceIdentity.graphVersion,
+        toGraphVersion: graphIdentity.graphVersion,
+        fromSchemaFingerprint: sourceIdentity.schemaFingerprint,
+        toSchemaFingerprint: graphIdentity.schemaFingerprint
+      };
+    },
+
     async init(initOptions: InitOptions<TState>): Promise<InitResult<TState>> {
       activeBranch = initOptions.branch ?? defaultBranch;
       const initialState = validateState(initOptions.initialState);
@@ -505,6 +690,8 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         repoId: options.repoId,
         schemaVersion: options.schemaVersion,
         graphVersion,
+        schemaFingerprint: graphIdentity.schemaFingerprint,
+        schemaFingerprintAlgorithm: graphIdentity.schemaFingerprintAlgorithm,
         defaultBranch: activeBranch,
         storageMode: "snapshot",
         initialState,
@@ -601,7 +788,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         repoId: options.repoId,
         branchName,
         schemaVersion: options.schemaVersion,
-        graphVersion,
+        graphIdentity,
         state: head.state,
         stateHash: head.stateHash,
         ...(commitOptions.message === undefined
@@ -627,7 +814,6 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
       revision: RevisionNumber,
       readRevisionOptions: ReadRevisionOptions = {}
     ): Promise<TState> {
-      void readRevisionOptions;
       const storedRevision = await options.persistence.readRevision({
         repoId: options.repoId,
         revision
@@ -661,7 +847,7 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         );
       }
 
-      const sourceGraphVersion = await readHeadGraphVersion(rawHead);
+      const sourceGraphIdentity = await readHeadGraphIdentity(rawHead);
       const targetGraphVersion = migrateOptions.to ?? graphVersion;
       assertCurrentTarget(targetGraphVersion);
       const migratedHead = await validateHead(rawHead, {
@@ -672,17 +858,19 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
         repoId: options.repoId,
         branchName,
         schemaVersion: options.schemaVersion,
-        graphVersion: targetGraphVersion,
+        graphIdentity,
         state: migratedHead.state,
         stateHash: migratedHead.stateHash,
         message:
           migrateOptions.message ??
-          `Migrate graph ${sourceGraphVersion} -> ${targetGraphVersion}`,
+          `Migrate graph ${sourceGraphIdentity.graphVersion} -> ${targetGraphVersion}`,
         ...(migrateOptions.author === undefined
           ? {}
           : { author: migrateOptions.author }),
         allowEmpty:
-          migrateOptions.allowEmpty ?? sourceGraphVersion !== targetGraphVersion,
+          migrateOptions.allowEmpty ??
+          (sourceGraphIdentity.graphVersion !== targetGraphVersion ||
+            sourceGraphIdentity.schemaFingerprint !== graphIdentity.schemaFingerprint),
         expectedHeadHash: migrateOptions.expectedHeadHash ?? rawHead.stateHash
       });
 

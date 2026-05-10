@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   DirtyHeadError,
   MigrationError,
+  SchemaCompatibilityError,
   createRepository,
   defineGraph,
   inMemoryPersistence,
@@ -34,6 +35,16 @@ const legacyGraph = defineGraph({
 });
 
 type LegacyCounterState = InferState<typeof legacyGraph>;
+
+const modifiedGraph = defineGraph({
+  counter: singleton(
+    z.object({
+      value: z.number().int(),
+      label: z.string(),
+      note: z.string().optional()
+    })
+  )
+});
 
 function initialState(value = 0): CounterState {
   return {
@@ -306,6 +317,74 @@ describe("Object VCS repository with in-memory persistence", () => {
     expect(head.state).toEqual(initialState());
   });
 
+  it("generates stable schema fingerprints for the same graph", () => {
+    const firstRepo = createCounterRepository("fingerprint-same-1");
+    const secondRepo = createCounterRepository("fingerprint-same-2");
+
+    expect(firstRepo.getGraphIdentity()).toEqual(secondRepo.getGraphIdentity());
+  });
+
+  it("generates different schema fingerprints when the graph changes", () => {
+    const firstRepo = createCounterRepository("fingerprint-different-1");
+    const secondRepo = createRepository({
+      repoId: "fingerprint-different-2",
+      graph: modifiedGraph,
+      schemaVersion: 1,
+      graphVersion: "test",
+      persistence: inMemoryPersistence<InferState<typeof modifiedGraph>>()
+    });
+
+    expect(firstRepo.getGraphIdentity().schemaFingerprint).not.toBe(
+      secondRepo.getGraphIdentity().schemaFingerprint
+    );
+  });
+
+  it("supports manual schema fingerprints", () => {
+    const repo = createRepository({
+      repoId: "fingerprint-manual",
+      graph,
+      schemaVersion: 1,
+      graphVersion: "test",
+      schemaFingerprint: "manual:counter-schema",
+      persistence: inMemoryPersistence<CounterState>()
+    });
+
+    expect(repo.getGraphIdentity()).toEqual({
+      graphVersion: "test",
+      schemaFingerprint: "manual:counter-schema",
+      schemaFingerprintAlgorithm: "manual"
+    });
+  });
+
+  it("requires a manual fingerprint for unsupported automatic Zod schemas", () => {
+    const graphWithTransform = defineGraph({
+      counter: singleton(z.string().transform(value => value.trim()))
+    });
+
+    expect(() =>
+      createRepository({
+        repoId: "fingerprint-unsupported",
+        graph: graphWithTransform,
+        schemaVersion: 1,
+        graphVersion: "test",
+        persistence: inMemoryPersistence<InferState<typeof graphWithTransform>>()
+      })
+    ).toThrow(
+      'Zod schema "ZodEffects" cannot be represented automatically. Provide schemaFingerprint manually.'
+    );
+  });
+
+  it("reports a revision compatible with the current graph", async () => {
+    const repo = createCounterRepository("fingerprint-compatible");
+    await repo.init({ initialState: initialState() });
+
+    await expect(repo.assertCompatibleGraph({ revision: 1 })).resolves.toEqual({
+      status: "compatible",
+      graphVersion: "test",
+      schemaFingerprint: repo.getGraphIdentity().schemaFingerprint
+    });
+  });
+
   it("keeps revision graph versions and reads old revisions through migrations", async () => {
     const persistence = inMemoryPersistence<unknown>();
     const legacyRepo = createRepository({
@@ -344,9 +423,20 @@ describe("Object VCS repository with in-memory persistence", () => {
 
     const revisions = await repo.listRevisions();
     expect(revisions[0]?.graphVersion).toBe("counter-v1");
-    await expect(repo.readRevision(1)).rejects.toThrow(
-      "Revision graph version does not match repository graph."
+    await expect(repo.assertCompatibleGraph({ revision: 1 })).resolves.toEqual({
+      status: "migration-required",
+      fromGraphVersion: "counter-v1",
+      toGraphVersion: "counter-v2",
+      fromSchemaFingerprint:
+        legacyRepo.getGraphIdentity().schemaFingerprint,
+      toSchemaFingerprint: repo.getGraphIdentity().schemaFingerprint
+    });
+    await expect(repo.readRevision(1)).rejects.toBeInstanceOf(
+      SchemaCompatibilityError
     );
+    await expect(
+      repo.readRevision(1, { migrateTo: "strict" })
+    ).rejects.toBeInstanceOf(SchemaCompatibilityError);
     await expect(repo.readRevision(1, { migrateTo: "current" })).resolves.toEqual(
       initialState()
     );
@@ -376,6 +466,15 @@ describe("Object VCS repository with in-memory persistence", () => {
     await expect(
       repo.readRevision(1, { migrateTo: "current" })
     ).rejects.toBeInstanceOf(MigrationError);
+    await expect(repo.assertCompatibleGraph({ revision: 1 })).resolves.toEqual({
+      status: "incompatible",
+      reason: "Schema fingerprints differ and no migration path is available.",
+      fromGraphVersion: "counter-v1",
+      toGraphVersion: "counter-v2",
+      fromSchemaFingerprint:
+        legacyRepo.getGraphIdentity().schemaFingerprint,
+      toSchemaFingerprint: repo.getGraphIdentity().schemaFingerprint
+    });
   });
 
   it("migrates HEAD into a new revision using the target graph version", async () => {

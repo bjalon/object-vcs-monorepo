@@ -57,6 +57,8 @@ const revision: RevisionSummary = {
   stateHash: "sha256:one",
   schemaVersion: 1,
   graphVersion: "test",
+  schemaFingerprint: "manual:test",
+  schemaFingerprintAlgorithm: "manual",
   message: "Initial state",
   createdAt: "2026-01-01T00:00:00.000Z",
   isEmptyRevision: false,
@@ -221,6 +223,20 @@ describe("@bjalon/object-vcs-react", () => {
 
 function createRepositoryMock(): ObjectVcsRepository<TestState> {
   return {
+    getGraphIdentity() {
+      return {
+        graphVersion: "test",
+        schemaFingerprint: "manual:test",
+        schemaFingerprintAlgorithm: "manual"
+      };
+    },
+    async assertCompatibleGraph() {
+      return {
+        status: "compatible",
+        graphVersion: "test",
+        schemaFingerprint: "manual:test"
+      };
+    },
     async init() {
       return {
         head,

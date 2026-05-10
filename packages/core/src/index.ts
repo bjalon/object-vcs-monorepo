@@ -5,6 +5,7 @@ export * from "./in-memory-persistence.js";
 export * from "./migrations.js";
 export * from "./persistence.js";
 export * from "./repository.js";
+export * from "./schema-fingerprint.js";
 export * from "./types.js";
 export * from "./zod.js";
 

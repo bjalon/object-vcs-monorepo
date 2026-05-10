@@ -2,10 +2,12 @@ import type {
   BranchName,
   BranchRecord,
   ConcurrencyMode,
+  GraphIdentity,
   Head,
   RepositoryId,
   RevisionNumber,
   RevisionRecord,
+  SchemaFingerprintAlgorithm,
   StateHash,
   StorageMode,
   TagName,
@@ -16,6 +18,8 @@ export interface RepoRecord {
   readonly repoId: RepositoryId;
   readonly schemaVersion: number;
   readonly graphVersion: string;
+  readonly schemaFingerprint: string;
+  readonly schemaFingerprintAlgorithm: SchemaFingerprintAlgorithm;
   readonly defaultBranch: BranchName;
   readonly storageMode: StorageMode;
   readonly nextRevision: RevisionNumber;
@@ -42,6 +46,8 @@ export interface CreateRepoInput<TState> {
   readonly repoId: RepositoryId;
   readonly schemaVersion: number;
   readonly graphVersion: string;
+  readonly schemaFingerprint: string;
+  readonly schemaFingerprintAlgorithm: SchemaFingerprintAlgorithm;
   readonly defaultBranch: BranchName;
   readonly storageMode: StorageMode;
   readonly initialState: TState;
@@ -91,6 +97,7 @@ export interface CreateRevisionInput<TState> {
   readonly branchName: BranchName;
   readonly schemaVersion?: number;
   readonly graphVersion?: string;
+  readonly graphIdentity?: GraphIdentity;
   readonly state: TState;
   readonly stateHash: StateHash;
   readonly message?: string;

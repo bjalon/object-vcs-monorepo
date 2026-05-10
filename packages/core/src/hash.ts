@@ -22,6 +22,10 @@ export function canonicalStringify(value: unknown): string {
   return result;
 }
 
+export function stableStringify(value: unknown): string {
+  return canonicalStringify(value);
+}
+
 function stringifyJsonValue(
   value: unknown,
   path: readonly (string | number)[],

@@ -796,6 +796,8 @@ export interface FirebaseRepoDocument {
   id: string;
   schemaVersion: number;
   graphVersion: string;
+  schemaFingerprint: string;
+  schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   defaultBranch: string;
   nextRevision: number;
   storageMode: StorageMode;
@@ -833,6 +835,8 @@ export interface FirebaseRevisionDocument {
   stateHash: string;
   schemaVersion: number;
   graphVersion: string;
+  schemaFingerprint: string;
+  schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   patchBlobRef?: string;
   snapshotBlobRef?: string;
   isCheckpoint: boolean;
@@ -1038,7 +1042,15 @@ object-vcs/
 Chaque révision stocke :
 
 - `schemaVersion` ;
-- `graphVersion`.
+- `graphVersion` ;
+- `schemaFingerprint` ;
+- `schemaFingerprintAlgorithm`.
+
+Le `schemaFingerprint` est calculé automatiquement depuis les schémas Zod quand
+c'est représentable. Sinon, l'application doit fournir un fingerprint manuel
+dans `createRepository({ schemaFingerprint: "manual:..." })`. Le fingerprint ne
+fait pas partie de la clé principale de stockage : le repository reste indexé par
+`repoId`, branche et numéro de révision.
 
 Configuration :
 
@@ -1056,14 +1068,15 @@ const repo = createRepository({
 Modes de lecture :
 
 ```ts
-type MigrationMode = "raw" | "latest" | "strict";
+type MigrationMode = "raw" | "current" | "strict";
 ```
 
 - `raw` : retourne l’état stocké ;
-- `latest` : applique les migrations ;
-- `strict` : refuse une ancienne version.
+- `current` : applique les migrations vers le graph courant ;
+- `strict` : refuse une révision dont le fingerprint diffère.
 
-La v0.1 peut prévoir les types sans implémenter toutes les migrations.
+Le repository expose aussi `getGraphIdentity()` et `assertCompatibleGraph()` pour
+inspecter la compatibilité d'une branche ou d'une révision avant lecture.
 
 ## 25. Modèle d’erreurs
 

@@ -111,6 +111,8 @@ export interface RepoDto {
   repoId: string;
   schemaVersion: number;
   graphVersion: string;
+  schemaFingerprint: string;
+  schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   defaultBranch: string;
   storageMode: "snapshot" | "patch" | "hybrid";
   nextRevision: number;
@@ -164,6 +166,8 @@ export interface RevisionDto {
   stateHash: string;
   schemaVersion: number;
   graphVersion: string;
+  schemaFingerprint: string;
+  schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   message?: string;
   createdAt: string;
   createdBy?: string;
@@ -213,6 +217,8 @@ export interface CreateRepoRequest<TState = unknown> {
   repoId: string;
   schemaVersion: number;
   graphVersion: string;
+  schemaFingerprint: string;
+  schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
   defaultBranch?: string;
   storageMode?: "snapshot" | "patch" | "hybrid";
   initialState: TState;
@@ -365,6 +371,11 @@ POST /v1/repos/{repoId}/branches/{branch}/commit
 export interface CommitRequest<TState = unknown> {
   state?: TState;
   stateHash?: string;
+  graphIdentity?: {
+    graphVersion: string;
+    schemaFingerprint: string;
+    schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
+  };
   message?: string;
   author?: string;
   allowEmpty?: boolean;
@@ -751,4 +762,3 @@ par :
 ```ts
 httpPersistence(...)
 ```
-

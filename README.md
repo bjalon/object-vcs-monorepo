@@ -115,10 +115,38 @@ export const repo = createRepository({
 });
 ```
 
-## Migrations de modèle
+## Identité de graph et migrations
 
-Chaque révision porte la `graphVersion` utilisée au moment du commit. Quand le
-graph change de manière incompatible, fournissez une migration explicite :
+Chaque révision porte la `graphVersion` utilisée au moment du commit, ainsi
+qu'un `schemaFingerprint` calculé depuis les schémas Zod du graph. La
+`graphVersion` reste le nom sémantique choisi par l'application ; le fingerprint
+sert à détecter une dérive structurelle inattendue.
+
+```ts
+const identity = repo.getGraphIdentity();
+
+const compatibility = await repo.assertCompatibleGraph({
+  revision: 1,
+});
+```
+
+Par défaut, le fingerprint est calculé avec
+`zod-json-schema-sha256-v1`. Si un schéma Zod utilise une forme non
+représentable automatiquement, fournissez un fingerprint manuel :
+
+```ts
+export const repo = createRepository({
+  repoId: "goblin-tavern-demo",
+  graph,
+  schemaVersion: 1,
+  graphVersion: "goblin-tavern-v1",
+  schemaFingerprint: "manual:goblin-tavern-v1",
+  persistence,
+});
+```
+
+Quand le graph change de manière incompatible, fournissez une migration
+explicite. Les migrations restent indexées par `graphVersion` :
 
 ```ts
 export const repo = createRepository({
@@ -160,7 +188,8 @@ await repo.migrateHead({
 ```
 
 Les anciennes révisions restent immuables. La migration crée une nouvelle
-révision dont `graphVersion` correspond au graph cible.
+révision dont `graphVersion`, `schemaFingerprint` et
+`schemaFingerprintAlgorithm` correspondent au graph cible.
 
 Initialisation :
 

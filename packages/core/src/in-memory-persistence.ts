@@ -170,6 +170,8 @@ export function inMemoryPersistence<TState>(
         repoId: input.repoId,
         schemaVersion: input.schemaVersion,
         graphVersion: input.graphVersion,
+        schemaFingerprint: input.schemaFingerprint,
+        schemaFingerprintAlgorithm: input.schemaFingerprintAlgorithm,
         defaultBranch: input.defaultBranch,
         storageMode: input.storageMode,
         nextRevision: input.commit ? 2 : 1,
@@ -198,6 +200,8 @@ export function inMemoryPersistence<TState>(
           stateHash: input.stateHash,
           schemaVersion: input.schemaVersion,
           graphVersion: input.graphVersion,
+          schemaFingerprint: input.schemaFingerprint,
+          schemaFingerprintAlgorithm: input.schemaFingerprintAlgorithm,
           ...(input.message === undefined ? {} : { message: input.message }),
           createdAt: timestamp,
           ...(input.author === undefined ? {} : { createdBy: input.author }),
@@ -345,7 +349,12 @@ export function inMemoryPersistence<TState>(
         branchName: input.branchName,
         stateHash: input.stateHash,
         schemaVersion: input.schemaVersion ?? store.repo.schemaVersion,
-        graphVersion: input.graphVersion ?? store.repo.graphVersion,
+        graphVersion: input.graphIdentity?.graphVersion ?? input.graphVersion ?? store.repo.graphVersion,
+        schemaFingerprint:
+          input.graphIdentity?.schemaFingerprint ?? store.repo.schemaFingerprint,
+        schemaFingerprintAlgorithm:
+          input.graphIdentity?.schemaFingerprintAlgorithm ??
+          store.repo.schemaFingerprintAlgorithm,
         ...(input.message === undefined ? {} : { message: input.message }),
         createdAt: timestamp,
         ...(input.author === undefined ? {} : { createdBy: input.author }),
@@ -361,7 +370,12 @@ export function inMemoryPersistence<TState>(
       store.repo = {
         ...store.repo,
         schemaVersion: input.schemaVersion ?? store.repo.schemaVersion,
-        graphVersion: input.graphVersion ?? store.repo.graphVersion,
+        graphVersion: input.graphIdentity?.graphVersion ?? input.graphVersion ?? store.repo.graphVersion,
+        schemaFingerprint:
+          input.graphIdentity?.schemaFingerprint ?? store.repo.schemaFingerprint,
+        schemaFingerprintAlgorithm:
+          input.graphIdentity?.schemaFingerprintAlgorithm ??
+          store.repo.schemaFingerprintAlgorithm,
         nextRevision: revisionNumber + 1,
         updatedAt: timestamp
       };
@@ -455,6 +469,8 @@ export function inMemoryPersistence<TState>(
             stateHash: head.stateHash,
             schemaVersion: store.repo.schemaVersion,
             graphVersion: store.repo.graphVersion,
+            schemaFingerprint: store.repo.schemaFingerprint,
+            schemaFingerprintAlgorithm: store.repo.schemaFingerprintAlgorithm,
             message: `Create revision for tag ${input.name}`,
             createdAt: timestamp,
             ...(input.author === undefined ? {} : { createdBy: input.author }),

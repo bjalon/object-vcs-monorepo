@@ -7,6 +7,21 @@ export type StateHash = string;
 export type HeadStatus = "clean" | "dirty";
 export type StorageMode = "snapshot" | "patch" | "hybrid";
 export type ConcurrencyMode = "strict" | "last-write-wins";
+export type SchemaFingerprintAlgorithm =
+  | "manual"
+  | "zod-json-schema-sha256-v1";
+
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue =
+  | JsonPrimitive
+  | { readonly [key: string]: JsonValue }
+  | readonly JsonValue[];
+
+export interface GraphIdentity {
+  readonly graphVersion: string;
+  readonly schemaFingerprint: string;
+  readonly schemaFingerprintAlgorithm: SchemaFingerprintAlgorithm;
+}
 
 export interface SchemaAdapter<T> {
   parse(input: unknown): T;
@@ -35,6 +50,8 @@ export interface RevisionRecord {
   stateHash: StateHash;
   schemaVersion: number;
   graphVersion: string;
+  schemaFingerprint: string;
+  schemaFingerprintAlgorithm: SchemaFingerprintAlgorithm;
   message?: string;
   createdAt: string;
   createdBy?: string;

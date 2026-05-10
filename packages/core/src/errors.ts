@@ -31,6 +31,7 @@ export class TagAlreadyExistsError extends ObjectVcsError {}
 export class DirtyHeadError extends ObjectVcsError {}
 export class ConcurrencyConflictError extends ObjectVcsError {}
 export class PersistenceError extends ObjectVcsError {}
+export class SchemaCompatibilityError extends ObjectVcsError {}
 
 export interface MigrationErrorDetails {
   readonly from: string;

@@ -91,6 +91,8 @@ export interface FirebaseRepoDocument {
   readonly id: string;
   readonly schemaVersion: number;
   readonly graphVersion: string;
+  readonly schemaFingerprint?: string;
+  readonly schemaFingerprintAlgorithm?: "manual" | "zod-json-schema-sha256-v1";
   readonly defaultBranch: string;
   readonly nextRevision: number;
   readonly storageMode: "snapshot" | "patch" | "hybrid";
@@ -118,6 +120,8 @@ export interface FirebaseRevisionDocument {
   readonly stateHash: string;
   readonly schemaVersion: number;
   readonly graphVersion: string;
+  readonly schemaFingerprint?: string;
+  readonly schemaFingerprintAlgorithm?: "manual" | "zod-json-schema-sha256-v1";
   readonly patchBlobRef?: string;
   readonly snapshotBlobRef?: string;
   readonly isCheckpoint: boolean;
@@ -170,6 +174,8 @@ export function firebasePersistence<TState>(
           repoId: input.repoId,
           schemaVersion: input.schemaVersion,
           graphVersion: input.graphVersion,
+          schemaFingerprint: input.schemaFingerprint,
+          schemaFingerprintAlgorithm: input.schemaFingerprintAlgorithm,
           defaultBranch: input.defaultBranch,
           storageMode: input.storageMode,
           nextRevision: input.commit ? 2 : 1,
@@ -180,6 +186,8 @@ export function firebasePersistence<TState>(
           id: input.repoId,
           schemaVersion: input.schemaVersion,
           graphVersion: input.graphVersion,
+          schemaFingerprint: input.schemaFingerprint,
+          schemaFingerprintAlgorithm: input.schemaFingerprintAlgorithm,
           defaultBranch: input.defaultBranch,
           nextRevision: repo.nextRevision,
           storageMode: input.storageMode,
@@ -411,7 +419,11 @@ export function firebasePersistence<TState>(
         const revision = createRevisionRecord({
           repo,
           schemaVersion: input.schemaVersion ?? repo.schemaVersion,
-          graphVersion: input.graphVersion ?? repo.graphVersion,
+          graphIdentity: input.graphIdentity ?? {
+            graphVersion: input.graphVersion ?? repo.graphVersion,
+            schemaFingerprint: repo.schemaFingerprint,
+            schemaFingerprintAlgorithm: repo.schemaFingerprintAlgorithm
+          },
           revision: revisionNumber,
           branchName: input.branchName,
           parentRevision,
@@ -444,7 +456,15 @@ export function firebasePersistence<TState>(
 
         transaction.update(refs.repo(input.repoId), {
           schemaVersion: input.schemaVersion ?? repo.schemaVersion,
-          graphVersion: input.graphVersion ?? repo.graphVersion,
+          graphVersion:
+            input.graphIdentity?.graphVersion ??
+            input.graphVersion ??
+            repo.graphVersion,
+          schemaFingerprint:
+            input.graphIdentity?.schemaFingerprint ?? repo.schemaFingerprint,
+          schemaFingerprintAlgorithm:
+            input.graphIdentity?.schemaFingerprintAlgorithm ??
+            repo.schemaFingerprintAlgorithm,
           nextRevision: revisionNumber + 1,
           updatedAt: timestamp
         });
@@ -1091,6 +1111,9 @@ function repoRecordFromDocument(
     repoId,
     schemaVersion: document.schemaVersion,
     graphVersion: document.graphVersion,
+    schemaFingerprint: document.schemaFingerprint ?? `legacy:${document.graphVersion}`,
+    schemaFingerprintAlgorithm:
+      document.schemaFingerprintAlgorithm ?? "manual",
     defaultBranch: document.defaultBranch,
     storageMode: document.storageMode,
     nextRevision: document.nextRevision,
@@ -1120,6 +1143,9 @@ function revisionRecordFromDocument(
     stateHash: document.stateHash,
     schemaVersion: document.schemaVersion,
     graphVersion: document.graphVersion,
+    schemaFingerprint: document.schemaFingerprint ?? `legacy:${document.graphVersion}`,
+    schemaFingerprintAlgorithm:
+      document.schemaFingerprintAlgorithm ?? "manual",
     ...(document.message === undefined ? {} : { message: document.message }),
     createdAt: document.createdAt,
     ...(document.createdBy === undefined
@@ -1295,7 +1321,11 @@ function createHeadRecord<TState>(input: {
 function createRevisionRecord(input: {
   readonly repo: RepoRecord;
   readonly schemaVersion?: number;
-  readonly graphVersion?: string;
+  readonly graphIdentity?: {
+    readonly graphVersion: string;
+    readonly schemaFingerprint: string;
+    readonly schemaFingerprintAlgorithm: "manual" | "zod-json-schema-sha256-v1";
+  };
   readonly revision: RevisionNumber;
   readonly branchName: BranchName;
   readonly parentRevision: RevisionNumber | null;
@@ -1312,7 +1342,12 @@ function createRevisionRecord(input: {
     branchName: input.branchName,
     stateHash: input.stateHash,
     schemaVersion: input.schemaVersion ?? input.repo.schemaVersion,
-    graphVersion: input.graphVersion ?? input.repo.graphVersion,
+    graphVersion: input.graphIdentity?.graphVersion ?? input.repo.graphVersion,
+    schemaFingerprint:
+      input.graphIdentity?.schemaFingerprint ?? input.repo.schemaFingerprint,
+    schemaFingerprintAlgorithm:
+      input.graphIdentity?.schemaFingerprintAlgorithm ??
+      input.repo.schemaFingerprintAlgorithm,
     ...(input.message === undefined ? {} : { message: input.message }),
     createdAt: input.timestamp,
     ...(input.author === undefined ? {} : { createdBy: input.author }),
@@ -1375,6 +1410,8 @@ function writeSnapshotRevision<TState>(
     stateHash: revision.stateHash,
     schemaVersion: revision.schemaVersion,
     graphVersion: revision.graphVersion,
+    schemaFingerprint: revision.schemaFingerprint,
+    schemaFingerprintAlgorithm: revision.schemaFingerprintAlgorithm,
     snapshotBlobRef: requireString(revision.snapshotRef, "snapshotRef"),
     isCheckpoint: revision.isCheckpoint,
     isEmptyRevision: revision.isEmptyRevision,
