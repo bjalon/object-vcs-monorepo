@@ -1,0 +1,75 @@
+name: Release GitHub Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run validations and npm publish --dry-run only"
+        required: true
+        default: true
+        type: boolean
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-github-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, test and publish GitHub packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@bjalon"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack dry run
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          npm publish --workspace @bjalon/object-vcs-core --dry-run
+          npm publish --workspace @bjalon/object-vcs-firebase --dry-run
+          npm publish --workspace @bjalon/object-vcs-http --dry-run
+          npm publish --workspace @bjalon/object-vcs-react --dry-run
+          npm publish --workspace @bjalon/object-vcs-vue --dry-run
+          npm publish --workspace @bjalon/object-vcs-vanilla --dry-run
+
+      - name: Publish
+        if: github.event_name == 'release' || inputs.dry_run == false
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          npm publish --workspace @bjalon/object-vcs-core
+          npm publish --workspace @bjalon/object-vcs-firebase
+          npm publish --workspace @bjalon/object-vcs-http
+          npm publish --workspace @bjalon/object-vcs-react
+          npm publish --workspace @bjalon/object-vcs-vue
+          npm publish --workspace @bjalon/object-vcs-vanilla

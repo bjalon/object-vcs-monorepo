@@ -1,6 +1,8 @@
-# Release npm
+# Release GitHub Packages
 
-Les packages publics sont publies sous le scope `@bjalon` :
+Les packages sont publies dans GitHub Packages, pas sur npmjs.org.
+
+Packages publies :
 
 - `@bjalon/object-vcs-core`
 - `@bjalon/object-vcs-firebase`
@@ -10,37 +12,37 @@ Les packages publics sont publies sous le scope `@bjalon` :
 - `@bjalon/object-vcs-vanilla`
 
 L'exemple `@bjalon/object-vcs-example-goblin-tavern` reste prive et n'est pas
-publie sur npm.
+publie.
 
-## Prerequis GitHub
+## Publication depuis GitHub Actions
 
-1. Creer un token npm avec droit de publication.
-2. Dans GitHub, ajouter le secret repository `NPM_TOKEN`.
-3. Verifier que les packages npm du scope `@bjalon` sont publics.
+Workflow : `.github/workflows/release-github-packages.yml`
 
-Le workflow utilise `npm publish --provenance`, donc les permissions GitHub
-incluent `id-token: write`.
+Ce workflow publie vers :
 
-## Release depuis GitHub Actions
+```txt
+https://npm.pkg.github.com
+```
 
-Workflow : `.github/workflows/release-npm.yml`
+Il utilise le `GITHUB_TOKEN` du workflow. Aucun secret `NPM_TOKEN` n'est
+necessaire pour publier depuis ce repo.
 
 Pour tester sans publier :
 
-1. Aller dans GitHub Actions.
-2. Ouvrir `Release npm packages`.
-3. Cliquer `Run workflow`.
-4. Laisser `dry_run` a `true`.
+1. aller dans GitHub Actions ;
+2. ouvrir `Release GitHub Packages` ;
+3. cliquer `Run workflow` ;
+4. laisser `dry_run` a `true`.
 
 Pour publier :
 
-1. Mettre a jour les versions dans les `package.json` des packages publies.
-2. Mettre a jour `package-lock.json`.
-3. Committer et pousser sur `main`.
-4. Creer une GitHub Release publiee, ou lancer manuellement le workflow avec
-   `dry_run` a `false`.
+1. verifier ou incrementer les versions dans les `packages/*/package.json` ;
+2. mettre a jour `package-lock.json` ;
+3. commit et push sur `main` ;
+4. lancer le workflow avec `dry_run` a `false`, ou creer une GitHub Release
+   publiee.
 
-Le workflow publie toujours dans cet ordre :
+Le workflow publie dans cet ordre :
 
 1. core ;
 2. firebase ;
@@ -49,8 +51,50 @@ Le workflow publie toujours dans cet ordre :
 5. vue ;
 6. vanilla.
 
-Cet ordre garantit que les packages qui dependent de
-`@bjalon/object-vcs-core` trouvent deja la version publique.
+## Utilisation dans un autre projet GitHub
+
+Dans le projet consommateur, ajouter un fichier `.npmrc` :
+
+```ini
+@bjalon:registry=https://npm.pkg.github.com
+```
+
+Puis installer les packages :
+
+```bash
+npm install @bjalon/object-vcs-core
+npm install @bjalon/object-vcs-react
+npm install @bjalon/object-vcs-firebase
+```
+
+Pour installer depuis un poste local, npm doit etre authentifie a GitHub
+Packages. Le plus simple est d'utiliser un token GitHub avec `read:packages` :
+
+```bash
+npm login --scope=@bjalon --registry=https://npm.pkg.github.com
+```
+
+Utilise ton identifiant GitHub comme username, et le token comme password.
+
+Pour installer depuis une GitHub Action d'un autre repo, ajouter dans ce repo :
+
+```yaml
+- uses: actions/setup-node@v6
+  with:
+    node-version: 24
+    cache: npm
+    registry-url: https://npm.pkg.github.com
+    scope: "@bjalon"
+
+- run: npm ci
+  env:
+    NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Si le repo consommateur n'a pas automatiquement acces au package, ouvrir la page
+GitHub du package, puis `Package settings` -> `Manage Actions access`, et donner
+l'acces au repo consommateur. Pour des packages prives, un token avec
+`read:packages` peut aussi etre stocke comme secret du repo consommateur.
 
 ## Verification locale avant release
 
@@ -62,18 +106,8 @@ npm run test
 npm run build
 ```
 
-Tu peux aussi verifier le contenu publie :
+Verification du contenu d'un package :
 
 ```bash
-npm publish --workspace @bjalon/object-vcs-core --access public --dry-run
+npm publish --workspace @bjalon/object-vcs-core --dry-run
 ```
-
-## Installation dans un autre projet
-
-```bash
-npm install @bjalon/object-vcs-core
-npm install @bjalon/object-vcs-firebase
-npm install @bjalon/object-vcs-react
-```
-
-Installe seulement les adapters ou bindings necessaires au projet cible.
