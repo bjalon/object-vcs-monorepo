@@ -146,6 +146,7 @@ export interface BranchDto {
   headRevision: number | null;
   baseRevision: number | null;
   headStateHash: string;
+  headBlobRef?: string;
   status: "clean" | "dirty";
   createdFromRevision: number | null;
   createdAt: string;

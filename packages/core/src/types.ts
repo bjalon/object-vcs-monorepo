@@ -67,6 +67,7 @@ export interface BranchRecord {
   headRevision: RevisionNumber | null;
   baseRevision: RevisionNumber | null;
   headStateHash: StateHash;
+  headBlobRef?: string;
   status: HeadStatus;
   createdFromRevision: RevisionNumber | null;
   createdAt: string;

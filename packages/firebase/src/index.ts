@@ -292,9 +292,27 @@ export function firebasePersistence<TState>(
     async listBranches(input: ListBranchesInput): Promise<BranchRecord[]> {
       await readRepoOrThrow(refs, input.repoId);
       const snapshots = await getDocs(refs.branches(input.repoId));
-      return snapshots.docs
-        .map(snapshot => branchRecordFromDocument(readDocumentData(snapshot)))
-        .sort((left, right) => left.name.localeCompare(right.name));
+      const branches = await Promise.all(
+        snapshots.docs.map(async snapshot => {
+          const branch = branchRecordFromDocument(readDocumentData(snapshot));
+          const headSnapshot = await getDoc(refs.head(input.repoId, branch.name));
+          if (!headSnapshot.exists()) {
+            return branch;
+          }
+
+          const headBlobRef = headBlobRefFromDocument(
+            readDocumentData(headSnapshot)
+          );
+          return headBlobRef === null
+            ? branch
+            : {
+                ...branch,
+                headBlobRef
+              };
+        })
+      );
+
+      return branches.sort((left, right) => left.name.localeCompare(right.name));
     },
 
     async writeHead(
@@ -1165,6 +1183,11 @@ function repoRecordFromDocument(
 
 function branchRecordFromDocument(data: FirestoreData): BranchRecord {
   return data as unknown as BranchRecord;
+}
+
+function headBlobRefFromDocument(data: FirestoreData): string | null {
+  const document = data as unknown as FirebaseHeadDocument<unknown>;
+  return typeof document.stateBlobRef === "string" ? document.stateBlobRef : null;
 }
 
 function tagRecordFromDocument(data: FirestoreData): TagRecord {

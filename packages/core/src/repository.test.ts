@@ -11,6 +11,7 @@ import {
   defineGraph,
   inMemoryPersistence,
   singleton,
+  type BranchRecord,
   type InferState,
   type PersistenceAdapter
 } from "./index.js";
@@ -82,6 +83,17 @@ function asPersistence<TState>(
   persistence: PersistenceAdapter<unknown>
 ): PersistenceAdapter<TState> {
   return persistence as unknown as PersistenceAdapter<TState>;
+}
+
+function findBranch(
+  branches: readonly BranchRecord[],
+  name: string
+): BranchRecord {
+  const branch = branches.find(item => item.name === name);
+  if (branch === undefined) {
+    throw new Error(`Branch "${name}" was not listed.`);
+  }
+  return branch;
 }
 
 describe("Object VCS repository with in-memory persistence", () => {
@@ -315,6 +327,108 @@ describe("Object VCS repository with in-memory persistence", () => {
     ).rejects.toBeInstanceOf(TagRevisionMismatchError);
     await expect(repo.listTags()).resolves.toHaveLength(1);
     await expect(repo.readRevision(1)).resolves.toEqual(initialState());
+  });
+
+  it("lists branch metadata after init", async () => {
+    const repo = createCounterRepository("list-branches-init");
+    await repo.init({ initialState: initialState() });
+
+    const branches = await repo.listBranches();
+
+    expect(branches).toHaveLength(1);
+    expect(branches[0]).toMatchObject({
+      repoId: "list-branches-init",
+      name: "main",
+      headRevision: 1,
+      baseRevision: 1,
+      headStateHash: branches[0]?.headStateHash,
+      status: "clean",
+      createdFromRevision: 1
+    });
+  });
+
+  it("lists branches after creating a branch", async () => {
+    const repo = createCounterRepository("list-branches-create");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(1), { commit: true });
+    await repo.createBranch("from-r1", { from: 1 });
+
+    const branches = await repo.listBranches();
+    const main = findBranch(branches, "main");
+    const fromR1 = findBranch(branches, "from-r1");
+
+    expect(main).toMatchObject({
+      headRevision: 2,
+      baseRevision: 2,
+      status: "clean",
+      createdFromRevision: 1
+    });
+    expect(fromR1).toMatchObject({
+      headRevision: 1,
+      baseRevision: 1,
+      status: "clean",
+      createdFromRevision: 1
+    });
+  });
+
+  it("keeps branch listing stable after checkout", async () => {
+    const repo = createCounterRepository("list-branches-checkout");
+    await repo.init({ initialState: initialState() });
+    await repo.createBranch("feature", { from: "HEAD" });
+
+    const beforeCheckout = await repo.listBranches();
+    await repo.checkout("feature");
+    const afterCheckout = await repo.listBranches();
+
+    expect(afterCheckout).toEqual(beforeCheckout);
+  });
+
+  it("lists dirty branch metadata", async () => {
+    const repo = createCounterRepository("list-branches-dirty");
+    await repo.init({ initialState: initialState() });
+
+    await repo.update(() => initialState(8));
+    const main = findBranch(await repo.listBranches(), "main");
+
+    expect(main).toMatchObject({
+      headRevision: null,
+      baseRevision: 1,
+      status: "dirty",
+      createdFromRevision: 1
+    });
+  });
+
+  it("preserves baseRevision and headRevision through branch divergence", async () => {
+    const repo = createCounterRepository("list-branches-revisions");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.createBranch("feature", { from: 1, checkout: true });
+    await repo.update(() => initialState(3));
+
+    const dirtyFeature = findBranch(await repo.listBranches(), "feature");
+    expect(dirtyFeature).toMatchObject({
+      headRevision: null,
+      baseRevision: 1,
+      status: "dirty",
+      createdFromRevision: 1
+    });
+
+    await repo.commit({ message: "Feature commit" });
+    const branches = await repo.listBranches();
+    const main = findBranch(branches, "main");
+    const feature = findBranch(branches, "feature");
+
+    expect(main).toMatchObject({
+      headRevision: 2,
+      baseRevision: 2,
+      status: "clean"
+    });
+    expect(feature).toMatchObject({
+      headRevision: 3,
+      baseRevision: 3,
+      status: "clean",
+      createdFromRevision: 1
+    });
   });
 
   it("creates a branch from an old revision and diverges without merging", async () => {

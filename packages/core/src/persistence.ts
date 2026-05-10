@@ -172,6 +172,7 @@ export interface UpdateBranchInput {
   readonly headRevision: RevisionNumber | null;
   readonly baseRevision: RevisionNumber | null;
   readonly headStateHash: StateHash;
+  readonly headBlobRef?: string;
   readonly status: "clean" | "dirty";
   readonly author?: string;
 }

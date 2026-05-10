@@ -624,6 +624,9 @@ export function inMemoryPersistence<TState>(
         headRevision: input.headRevision,
         baseRevision: input.baseRevision,
         headStateHash: input.headStateHash,
+        ...(input.headBlobRef === undefined
+          ? {}
+          : { headBlobRef: input.headBlobRef }),
         status: input.status,
         updatedAt: now(),
         ...(input.author === undefined ? {} : { updatedBy: input.author })
