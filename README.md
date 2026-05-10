@@ -277,6 +277,14 @@ await repo.tag("menu-halloween", {
 });
 ```
 
+Supprimer un tag sans supprimer sa révision :
+
+```ts
+await repo.deleteTag("menu-halloween", {
+  expectedRevision: 4,
+});
+```
+
 Créer une branche depuis une ancienne révision :
 
 ```ts
@@ -338,6 +346,7 @@ Tous les endpoints sont préfixés par `/v1`.
 | `GET` | `/repos/{repoId}/revisions/{revision}/state` | Lire l’état complet reconstruit d’une révision. |
 | `GET` | `/repos/{repoId}/tags` | Lister les tags. |
 | `POST` | `/repos/{repoId}/tags` | Créer un tag. |
+| `DELETE` | `/repos/{repoId}/tags/{tagName}` | Supprimer un tag sans supprimer sa révision. |
 | `GET` | `/repos/{repoId}/events` | Optionnel : flux SSE temps réel pour `HEAD`, révisions, branches et tags. |
 
 Le backend doit garantir au minimum :

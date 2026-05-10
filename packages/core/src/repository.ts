@@ -32,6 +32,7 @@ import type {
   TagRecord
 } from "./types.js";
 import type {
+  DeleteTagResult,
   PersistenceAdapter,
   RevisionSummary,
   Unsubscribe
@@ -115,6 +116,12 @@ export interface TagOptions {
   readonly author?: string;
   readonly createRevisionIfDirty?: boolean;
   readonly overwrite?: boolean;
+}
+
+export interface DeleteTagOptions {
+  readonly missing?: "throw" | "ignore";
+  readonly expectedRevision?: RevisionNumber;
+  readonly author?: string;
 }
 
 export interface CreateBranchOptions {
@@ -206,6 +213,10 @@ export interface ObjectVcsRepository<TState> {
   ): Unsubscribe;
   tag(name: TagName, options?: TagOptions): Promise<TagRecord>;
   listTags(): Promise<TagRecord[]>;
+  deleteTag(
+    name: TagName,
+    options?: DeleteTagOptions
+  ): Promise<DeleteTagResult>;
   listBranches(): Promise<BranchRecord[]>;
   createBranch(
     name: BranchName,
@@ -971,6 +982,23 @@ export function createRepository<TGraph extends ObjectVcsGraph>(
     async listTags(): Promise<TagRecord[]> {
       return options.persistence.listTags({
         repoId: options.repoId
+      });
+    },
+
+    async deleteTag(
+      name: TagName,
+      deleteTagOptions: DeleteTagOptions = {}
+    ): Promise<DeleteTagResult> {
+      return options.persistence.deleteTag({
+        repoId: options.repoId,
+        name,
+        missing: deleteTagOptions.missing ?? "throw",
+        ...(deleteTagOptions.expectedRevision === undefined
+          ? {}
+          : { expectedRevision: deleteTagOptions.expectedRevision }),
+        ...(deleteTagOptions.author === undefined
+          ? {}
+          : { author: deleteTagOptions.author })
       });
     },
 

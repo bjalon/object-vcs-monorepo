@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ConcurrencyConflictError,
   PersistenceError,
-  RepositoryAlreadyExistsError
+  RepositoryAlreadyExistsError,
+  TagNotFoundError,
+  TagRevisionMismatchError
 } from "@bjalon/object-vcs-core";
 
 import {
@@ -14,6 +16,7 @@ import {
   type CreateRepoRequest,
   type CreateRepoResponse,
   type CreateTagResponse,
+  type DeleteTagResponse,
   type GetHeadResponse,
   type GetRepoResponse,
   type GetRevisionStateResponse,
@@ -131,6 +134,11 @@ describe("@bjalon/object-vcs-http", () => {
       jsonResponse<ListRevisionsResponse>(200, { revisions: [revision] }),
       jsonResponse<CreateTagResponse<TestState>>(201, { tag }),
       jsonResponse<ListTagsResponse>(200, { tags: [tag] }),
+      jsonResponse<DeleteTagResponse>(200, {
+        deleted: true,
+        name: "v1",
+        previousRevision: 1
+      }),
       jsonResponse<CreateBranchResponse<TestState>>(201, { branch }),
       jsonResponse<RestoreResponse<TestState>>(200, { head, revision }),
       jsonResponse<ResetBranchResponse<TestState>>(200, { branch, head })
@@ -185,6 +193,11 @@ describe("@bjalon/object-vcs-http", () => {
     });
     await adapter.createTag({ repoId: "repo 1", name: "v1", revision: "HEAD" });
     await adapter.listTags({ repoId: "repo 1" });
+    await adapter.deleteTag({
+      repoId: "repo 1",
+      name: "v1",
+      expectedRevision: 1
+    });
     await adapter.createBranch({
       repoId: "repo 1",
       name: "feature/a",
@@ -217,6 +230,7 @@ describe("@bjalon/object-vcs-http", () => {
       "https://api.example.com/object-vcs/v1/repos/repo%201/revisions?branch=main&limit=10&after=1&order=asc",
       "https://api.example.com/object-vcs/v1/repos/repo%201/tags",
       "https://api.example.com/object-vcs/v1/repos/repo%201/tags",
+      "https://api.example.com/object-vcs/v1/repos/repo%201/tags/v1?missing=throw&expectedRevision=1",
       "https://api.example.com/object-vcs/v1/repos/repo%201/branches",
       "https://api.example.com/object-vcs/v1/repos/repo%201/branches/main/restore",
       "https://api.example.com/object-vcs/v1/repos/repo%201/branches/main/reset"
@@ -232,6 +246,7 @@ describe("@bjalon/object-vcs-http", () => {
       "GET",
       "POST",
       "GET",
+      "DELETE",
       "POST",
       "POST",
       "POST"
@@ -279,6 +294,18 @@ describe("@bjalon/object-vcs-http", () => {
           code: "REVISION_NOT_FOUND",
           message: "Revision missing."
         }
+      }),
+      jsonResponse(404, {
+        error: {
+          code: "TAG_NOT_FOUND",
+          message: "Tag missing."
+        }
+      }),
+      jsonResponse(409, {
+        error: {
+          code: "TAG_REVISION_MISMATCH",
+          message: "Tag changed."
+        }
       })
     ]);
     const adapter = httpPersistence<TestState>({
@@ -311,6 +338,16 @@ describe("@bjalon/object-vcs-http", () => {
     await expect(
       adapter.readRevision({ repoId: "repo 1", revision: 99 })
     ).resolves.toBeNull();
+    await expect(
+      adapter.deleteTag({ repoId: "repo 1", name: "missing" })
+    ).rejects.toBeInstanceOf(TagNotFoundError);
+    await expect(
+      adapter.deleteTag({
+        repoId: "repo 1",
+        name: "v1",
+        expectedRevision: 2
+      })
+    ).rejects.toBeInstanceOf(TagRevisionMismatchError);
   });
 
   it("reports unsupported branch patching explicitly", async () => {

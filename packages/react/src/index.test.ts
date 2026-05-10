@@ -296,6 +296,13 @@ function createRepositoryMock(): ObjectVcsRepository<TestState> {
     async listTags() {
       return [tag];
     },
+    async deleteTag() {
+      return {
+        deleted: true,
+        name: tag.name,
+        previousRevision: tag.revision
+      };
+    },
     async listBranches() {
       return [branch];
     },

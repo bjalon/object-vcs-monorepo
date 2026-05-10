@@ -296,6 +296,9 @@ Règles :
 - si `HEAD` est dirty et `createRevisionIfDirty !== false`, une révision est créée puis taggée ;
 - si `HEAD` est dirty et `createRevisionIfDirty === false`, une erreur `DirtyHeadError` est levée ;
 - si le tag existe déjà, une erreur est levée sauf `overwrite: true`.
+- supprimer un tag ne supprime jamais la révision cible ;
+- supprimer un tag absent lève `TagNotFoundError` par défaut, ou retourne `deleted: false` avec `missing: "ignore"` ;
+- `expectedRevision` protège la suppression et lève `TagRevisionMismatchError` si le tag pointe ailleurs.
 
 ## 11. API publique du repository
 
@@ -339,6 +342,11 @@ export interface ObjectVcsRepository<TState> {
   tag(name: string, options?: TagOptions): Promise<TagRecord>;
 
   listTags(): Promise<TagRecord[]>;
+
+  deleteTag(
+    name: string,
+    options?: DeleteTagOptions
+  ): Promise<DeleteTagResult>;
 
   createBranch(
     name: string,
@@ -392,6 +400,20 @@ export interface TagOptions {
   author?: string;
   createRevisionIfDirty?: boolean;
   overwrite?: boolean;
+}
+```
+
+```ts
+export interface DeleteTagOptions {
+  missing?: "throw" | "ignore";
+  expectedRevision?: RevisionNumber;
+  author?: string;
+}
+
+export interface DeleteTagResult {
+  deleted: boolean;
+  name: string;
+  previousRevision: RevisionNumber | null;
 }
 ```
 
@@ -713,6 +735,8 @@ export interface PersistenceAdapter<TState> {
   createTag(input: CreateTagInput): Promise<TagRecord>;
 
   listTags(input: ListTagsInput): Promise<TagRecord[]>;
+
+  deleteTag(input: DeleteTagInput): Promise<DeleteTagResult>;
 
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
 
@@ -1089,6 +1113,8 @@ class BranchNotFoundError extends ObjectVcsError {}
 class BranchAlreadyExistsError extends ObjectVcsError {}
 class RevisionNotFoundError extends ObjectVcsError {}
 class TagAlreadyExistsError extends ObjectVcsError {}
+class TagNotFoundError extends ObjectVcsError {}
+class TagRevisionMismatchError extends ObjectVcsError {}
 class DirtyHeadError extends ObjectVcsError {}
 class ConcurrencyConflictError extends ObjectVcsError {}
 class DetachedHeadWriteError extends ObjectVcsError {}

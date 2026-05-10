@@ -143,6 +143,20 @@ export interface ListTagsInput {
   readonly repoId: RepositoryId;
 }
 
+export interface DeleteTagInput {
+  readonly repoId: RepositoryId;
+  readonly name: TagName;
+  readonly missing?: "throw" | "ignore";
+  readonly expectedRevision?: RevisionNumber;
+  readonly author?: string;
+}
+
+export interface DeleteTagResult {
+  readonly deleted: boolean;
+  readonly name: TagName;
+  readonly previousRevision: RevisionNumber | null;
+}
+
 export interface CreateBranchInput {
   readonly repoId: RepositoryId;
   readonly name: BranchName;
@@ -209,6 +223,7 @@ export interface PersistenceAdapter<TState> {
   listRevisions(input: ListRevisionsInput): Promise<RevisionSummary[]>;
   createTag(input: CreateTagInput): Promise<TagRecord>;
   listTags(input: ListTagsInput): Promise<TagRecord[]>;
+  deleteTag(input: DeleteTagInput): Promise<DeleteTagResult>;
   createBranch(input: CreateBranchInput): Promise<BranchRecord>;
   updateBranch(input: UpdateBranchInput): Promise<BranchRecord>;
   restoreRevision(

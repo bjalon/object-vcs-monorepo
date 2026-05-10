@@ -585,7 +585,38 @@ export interface CreateTagResponse<TState = unknown> {
 - Si `HEAD` est dirty et `createRevisionIfDirty === false`, retourner `409` ou `422` avec `DIRTY_HEAD`.
 - Si le tag existe et `overwrite !== true`, retourner `409`.
 
-## 22. Endpoint optionnel : flux temps réel SSE
+## 22. Endpoint : supprimer un tag
+
+```http
+DELETE /v1/repos/{repoId}/tags/{tagName}
+```
+
+### Query params
+
+| Paramètre | Type | Description |
+|---|---|---|
+| `missing` | `throw` ou `ignore` | Défaut : `throw`. |
+| `expectedRevision` | number | Supprime seulement si le tag pointe vers cette révision. |
+
+### Response
+
+```ts
+export interface DeleteTagResponse {
+  deleted: boolean;
+  name: string;
+  previousRevision: number | null;
+}
+```
+
+### Sémantique
+
+- Si le tag existe, il est supprimé et `previousRevision` contient sa révision cible.
+- Si le tag est absent et `missing=throw`, retourner `404 TAG_NOT_FOUND`.
+- Si le tag est absent et `missing=ignore`, retourner `deleted: false`.
+- Si `expectedRevision` ne correspond pas, retourner `409 TAG_REVISION_MISMATCH`.
+- Supprimer un tag ne supprime jamais la révision cible.
+
+## 23. Endpoint optionnel : flux temps réel SSE
 
 ```http
 GET /v1/repos/{repoId}/events?branch=main
@@ -613,7 +644,7 @@ data: {"branchName":"main","stateHash":"sha256:abc","status":"dirty"}
 
 Si cet endpoint n’existe pas, l’adapter HTTP doit pouvoir fonctionner en polling ou sans realtime.
 
-## 23. Sécurité
+## 24. Sécurité
 
 Le backend doit décider du modèle de sécurité. Recommandation minimale :
 
@@ -623,7 +654,7 @@ Le backend doit décider du modèle de sécurité. Recommandation minimale :
 - écriture autorisée aux `writer` ;
 - opérations dangereuses comme `reset` réservées aux `admin` ou explicitement activées.
 
-## 24. Validation de schéma côté backend
+## 25. Validation de schéma côté backend
 
 Le client valide toujours l’état avant écriture. Mais dans un contexte non fiable, le backend doit aussi valider.
 
@@ -645,7 +676,7 @@ Inconvénient : plus complexe, surtout avec des schémas Zod côté serveur.
 
 Pour une application sensible, choisir ce mode.
 
-## 25. Stockage interne recommandé
+## 26. Stockage interne recommandé
 
 ### 25.1 PostgreSQL
 
@@ -693,7 +724,7 @@ Utiliser :
 - transactions ;
 - item immutability pour révisions.
 
-## 26. Exemple de cycle complet
+## 27. Exemple de cycle complet
 
 ### 26.1 Lire HEAD
 
@@ -749,7 +780,7 @@ POST /v1/repos/goblin-tavern-demo/tags
 }
 ```
 
-## 27. Compatibilité client
+## 28. Compatibilité client
 
 Le client `@bjalon/object-vcs-http` doit exposer la même interface de persistance que Firebase. Le code applicatif ne doit pas changer lorsqu’on remplace :
 

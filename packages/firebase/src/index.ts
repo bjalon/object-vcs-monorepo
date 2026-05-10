@@ -20,6 +20,8 @@ import {
   RepositoryNotFoundError,
   RevisionNotFoundError,
   TagAlreadyExistsError,
+  TagNotFoundError,
+  TagRevisionMismatchError,
   type BranchName,
   type BranchRecord,
   type CreateBranchInput,
@@ -28,6 +30,8 @@ import {
   type CreateRevisionInput,
   type CreateRevisionResult,
   type CreateTagInput,
+  type DeleteTagInput,
+  type DeleteTagResult,
   type GetBranchInput,
   type GetHeadInput,
   type GetRepoInput,
@@ -712,6 +716,43 @@ export function firebasePersistence<TState>(
       return snapshots.docs
         .map(snapshot => tagRecordFromDocument(readDocumentData(snapshot)))
         .sort((left, right) => left.name.localeCompare(right.name));
+    },
+
+    async deleteTag(input: DeleteTagInput): Promise<DeleteTagResult> {
+      return runTransaction(resolvedOptions.db, async transaction => {
+        await readRepoOrThrowInTransaction(transaction, refs, input.repoId);
+        const tagReference = refs.tag(input.repoId, input.name);
+        const tagSnapshot = await transaction.get(tagReference);
+
+        if (!tagSnapshot.exists()) {
+          if ((input.missing ?? "throw") === "ignore") {
+            return {
+              deleted: false,
+              name: input.name,
+              previousRevision: null
+            };
+          }
+
+          throw new TagNotFoundError(`Tag "${input.name}" was not found.`);
+        }
+
+        const tag = tagRecordFromDocument(readDocumentData(tagSnapshot));
+        if (
+          input.expectedRevision !== undefined &&
+          tag.revision !== input.expectedRevision
+        ) {
+          throw new TagRevisionMismatchError(
+            `Tag "${input.name}" points to revision "${tag.revision}", not "${input.expectedRevision}".`
+          );
+        }
+
+        transaction.delete(tagReference);
+        return {
+          deleted: true,
+          name: input.name,
+          previousRevision: tag.revision
+        };
+      });
     },
 
     async createBranch(input: CreateBranchInput): Promise<BranchRecord> {

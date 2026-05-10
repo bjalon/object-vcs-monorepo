@@ -5,6 +5,8 @@ import {
   DirtyHeadError,
   MigrationError,
   SchemaCompatibilityError,
+  TagNotFoundError,
+  TagRevisionMismatchError,
   createRepository,
   defineGraph,
   inMemoryPersistence,
@@ -247,6 +249,72 @@ describe("Object VCS repository with in-memory persistence", () => {
     expect(tag.revision).toBe(2);
     expect((await repo.getHead()).status).toBe("clean");
     await expect(repo.listRevisions()).resolves.toHaveLength(2);
+  });
+
+  it("deletes an existing tag without deleting its revision", async () => {
+    const repo = createCounterRepository("delete-tag-existing");
+    await repo.init({ initialState: initialState() });
+    await repo.tag("v1");
+
+    const result = await repo.deleteTag("v1");
+
+    expect(result).toEqual({
+      deleted: true,
+      name: "v1",
+      previousRevision: 1
+    });
+    await expect(repo.listTags()).resolves.toEqual([]);
+    await expect(repo.readRevision(1)).resolves.toEqual(initialState());
+  });
+
+  it("throws when deleting a missing tag by default", async () => {
+    const repo = createCounterRepository("delete-tag-missing-throw");
+    await repo.init({ initialState: initialState() });
+
+    await expect(repo.deleteTag("missing")).rejects.toBeInstanceOf(
+      TagNotFoundError
+    );
+  });
+
+  it("ignores missing tags when requested", async () => {
+    const repo = createCounterRepository("delete-tag-missing-ignore");
+    await repo.init({ initialState: initialState() });
+
+    await expect(
+      repo.deleteTag("missing", { missing: "ignore" })
+    ).resolves.toEqual({
+      deleted: false,
+      name: "missing",
+      previousRevision: null
+    });
+  });
+
+  it("deletes a tag when expectedRevision matches", async () => {
+    const repo = createCounterRepository("delete-tag-expected-success");
+    await repo.init({ initialState: initialState() });
+    await repo.update(() => initialState(2), { commit: true });
+    await repo.tag("v2", { revision: 2 });
+
+    await expect(
+      repo.deleteTag("v2", { expectedRevision: 2 })
+    ).resolves.toEqual({
+      deleted: true,
+      name: "v2",
+      previousRevision: 2
+    });
+    await expect(repo.readRevision(2)).resolves.toEqual(initialState(2));
+  });
+
+  it("rejects tag deletion when expectedRevision mismatches", async () => {
+    const repo = createCounterRepository("delete-tag-expected-mismatch");
+    await repo.init({ initialState: initialState() });
+    await repo.tag("v1");
+
+    await expect(
+      repo.deleteTag("v1", { expectedRevision: 2 })
+    ).rejects.toBeInstanceOf(TagRevisionMismatchError);
+    await expect(repo.listTags()).resolves.toHaveLength(1);
+    await expect(repo.readRevision(1)).resolves.toEqual(initialState());
   });
 
   it("creates a branch from an old revision and diverges without merging", async () => {

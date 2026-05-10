@@ -8,6 +8,8 @@ import {
   RepositoryNotFoundError,
   RevisionNotFoundError,
   TagAlreadyExistsError,
+  TagNotFoundError,
+  TagRevisionMismatchError,
   ValidationError,
   type BranchRecord,
   type CreateBranchInput,
@@ -16,6 +18,8 @@ import {
   type CreateRevisionInput,
   type CreateRevisionResult,
   type CreateTagInput,
+  type DeleteTagInput,
+  type DeleteTagResult,
   type GetBranchInput,
   type GetHeadInput,
   type GetRepoInput,
@@ -219,6 +223,8 @@ export interface GetRevisionStateResponse<TState = unknown> {
 export interface ListTagsResponse {
   readonly tags: TagDto[];
 }
+
+export type DeleteTagResponse = DeleteTagResult;
 
 export interface CreateTagRequest {
   readonly name: string;
@@ -466,6 +472,20 @@ export function httpPersistence<TState>(
       return response.tags;
     },
 
+    async deleteTag(input: DeleteTagInput): Promise<DeleteTagResult> {
+      return client.request<DeleteTagResponse>({
+        method: "DELETE",
+        path: `/repos/${encodePath(input.repoId)}/tags/${encodePath(input.name)}`,
+        query: {
+          missing: input.missing ?? "throw",
+          ...(input.expectedRevision === undefined
+            ? {}
+            : { expectedRevision: String(input.expectedRevision) })
+        },
+        write: true
+      });
+    },
+
     async createBranch(input: CreateBranchInput): Promise<BranchRecord> {
       const response = await client.request<CreateBranchResponse<TState>, CreateBranchRequest>({
         method: "POST",
@@ -533,7 +553,7 @@ export function httpPersistence<TState>(
 export const objectVcsHttpPackage = "@bjalon/object-vcs-http";
 
 interface HttpRequest<TBody> {
-  readonly method: "GET" | "POST" | "PUT";
+  readonly method: "DELETE" | "GET" | "POST" | "PUT";
   readonly path: string;
   readonly query?: Readonly<Record<string, string>>;
   readonly body?: TBody;
@@ -671,6 +691,10 @@ async function httpErrorToObjectVcsError(
       return new RevisionNotFoundError(message);
     case "TAG_ALREADY_EXISTS":
       return new TagAlreadyExistsError(message);
+    case "TAG_NOT_FOUND":
+      return new TagNotFoundError(message);
+    case "TAG_REVISION_MISMATCH":
+      return new TagRevisionMismatchError(message);
     case "DIRTY_HEAD":
       return new DirtyHeadError(message);
     case "CONCURRENCY_CONFLICT":
@@ -726,6 +750,9 @@ function fallbackHttpError(
   message: string
 ): Error {
   if (status === 404) {
+    if (code.includes("TAG")) {
+      return new TagNotFoundError(message);
+    }
     return new RepositoryNotFoundError(message);
   }
 
@@ -737,7 +764,9 @@ function fallbackHttpError(
       return new RepositoryAlreadyExistsError(message);
     }
     if (code.includes("TAG")) {
-      return new TagAlreadyExistsError(message);
+      return code.includes("REVISION_MISMATCH")
+        ? new TagRevisionMismatchError(message)
+        : new TagAlreadyExistsError(message);
     }
     return new ConcurrencyConflictError(message);
   }

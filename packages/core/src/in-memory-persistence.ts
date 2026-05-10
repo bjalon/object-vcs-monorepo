@@ -7,7 +7,9 @@ import {
   RepositoryAlreadyExistsError,
   RepositoryNotFoundError,
   RevisionNotFoundError,
-  TagAlreadyExistsError
+  TagAlreadyExistsError,
+  TagNotFoundError,
+  TagRevisionMismatchError
 } from "./errors.js";
 import { cloneJson } from "./json.js";
 import type {
@@ -24,6 +26,8 @@ import type {
   CreateRevisionInput,
   CreateRevisionResult,
   CreateTagInput,
+  DeleteTagInput,
+  DeleteTagResult,
   GetBranchInput,
   GetHeadInput,
   GetRepoInput,
@@ -523,6 +527,39 @@ export function inMemoryPersistence<TState>(
     async listTags(input: ListTagsInput): Promise<TagRecord[]> {
       const store = getStore(input.repoId);
       return Array.from(store.tags.values()).map(cloneJson);
+    },
+
+    async deleteTag(input: DeleteTagInput): Promise<DeleteTagResult> {
+      const store = getStore(input.repoId);
+      const tag = store.tags.get(input.name);
+
+      if (tag === undefined) {
+        if ((input.missing ?? "throw") === "ignore") {
+          return {
+            deleted: false,
+            name: input.name,
+            previousRevision: null
+          };
+        }
+
+        throw new TagNotFoundError(`Tag "${input.name}" was not found.`);
+      }
+
+      if (
+        input.expectedRevision !== undefined &&
+        tag.revision !== input.expectedRevision
+      ) {
+        throw new TagRevisionMismatchError(
+          `Tag "${input.name}" points to revision "${tag.revision}", not "${input.expectedRevision}".`
+        );
+      }
+
+      store.tags.delete(input.name);
+      return {
+        deleted: true,
+        name: input.name,
+        previousRevision: tag.revision
+      };
     },
 
     async createBranch(input: CreateBranchInput): Promise<BranchRecord> {

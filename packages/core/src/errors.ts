@@ -28,6 +28,8 @@ export class EntityNotFoundError extends ObjectVcsError {}
 export class EntityAlreadyExistsError extends ObjectVcsError {}
 export class RevisionNotFoundError extends ObjectVcsError {}
 export class TagAlreadyExistsError extends ObjectVcsError {}
+export class TagNotFoundError extends ObjectVcsError {}
+export class TagRevisionMismatchError extends ObjectVcsError {}
 export class DirtyHeadError extends ObjectVcsError {}
 export class ConcurrencyConflictError extends ObjectVcsError {}
 export class PersistenceError extends ObjectVcsError {}
