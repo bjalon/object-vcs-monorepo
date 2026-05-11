@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "description": "Firestore persistence adapter for Object VCS.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bjalon/object-vcs-monorepo.git",
+    "directory": "packages/firebase"
+  },
   "type": "module",
   "sideEffects": false,
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "exports": {
     ".": {

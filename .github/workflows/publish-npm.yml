@@ -1,0 +1,143 @@
+name: Publish packages to npm
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version semver to release, for example 0.1.1. Leave empty to publish current package versions."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare release version
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "${RELEASE_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "Invalid semver version: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const version = process.env.RELEASE_VERSION;
+          const packageDirs = [
+            "packages/core",
+            "packages/firebase",
+            "packages/http",
+            "packages/react",
+            "packages/vanilla",
+            "packages/vue"
+          ];
+          const rootPackagePath = "package.json";
+          const rootPackage = JSON.parse(fs.readFileSync(rootPackagePath, "utf8"));
+          rootPackage.version = version;
+          fs.writeFileSync(rootPackagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+
+          for (const packageDir of packageDirs) {
+            const packagePath = `${packageDir}/package.json`;
+            const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+            packageJson.version = version;
+
+            if (
+              packageJson.dependencies !== undefined &&
+              packageJson.dependencies["@bjalon/object-vcs-core"] !== undefined
+            ) {
+              packageJson.dependencies["@bjalon/object-vcs-core"] = `^${version}`;
+            }
+
+            fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+          }
+          NODE
+
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit and tag release
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add package.json package-lock.json packages/*/package.json
+          git commit -m "Release v${RELEASE_VERSION}"
+          git tag "v${RELEASE_VERSION}"
+          git push origin HEAD
+          git push origin "v${RELEASE_VERSION}"
+
+      - name: Create GitHub release
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "GitHub release v${RELEASE_VERSION} already exists."
+            exit 0
+          fi
+
+          gh release create "v${RELEASE_VERSION}" \
+            --title "v${RELEASE_VERSION}" \
+            --notes "Release v${RELEASE_VERSION}"
+
+      - name: Publish packages
+        run: |
+          set -euo pipefail
+
+          for package_dir in packages/core packages/firebase packages/http packages/react packages/vanilla packages/vue; do
+            package_name="$(node -p "require('./${package_dir}/package.json').name")"
+            package_version="$(node -p "require('./${package_dir}/package.json').version")"
+
+            if npm view "${package_name}@${package_version}" version --registry https://registry.npmjs.org/ >/dev/null 2>&1; then
+              echo "Skipping ${package_name}@${package_version}: already published."
+              continue
+            fi
+
+            npm publish "${package_dir}" --registry https://registry.npmjs.org/ --access public
+          done
