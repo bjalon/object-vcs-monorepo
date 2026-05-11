@@ -104,10 +104,19 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add package.json package-lock.json packages/*/package.json
-          git commit -m "Release v${RELEASE_VERSION}"
-          git tag "v${RELEASE_VERSION}"
-          git push origin HEAD
-          git push origin "v${RELEASE_VERSION}"
+          if git diff --cached --quiet; then
+            echo "No release version changes to commit."
+          else
+            git commit -m "Release v${RELEASE_VERSION}"
+            git push origin HEAD
+          fi
+
+          if git rev-parse "v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${RELEASE_VERSION} already exists."
+          else
+            git tag "v${RELEASE_VERSION}"
+            git push origin "v${RELEASE_VERSION}"
+          fi
 
       - name: Create GitHub release
         if: github.event_name == 'workflow_dispatch' && inputs.version != ''
@@ -139,5 +148,5 @@ jobs:
               continue
             fi
 
-            npm publish "${package_dir}" --registry https://registry.npmjs.org/ --access public
+            npm publish "./${package_dir}" --registry https://registry.npmjs.org/ --access public
           done
