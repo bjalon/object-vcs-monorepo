@@ -1,6 +1,6 @@
 {
   "name": "@bjalon/object-vcs-vue",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vue bindings for Object VCS.",
   "license": "MIT",
   "repository": {
@@ -36,7 +36,7 @@
     "lint": "eslint \"src/**/*.ts\""
   },
   "dependencies": {
-    "@bjalon/object-vcs-core": "^0.1.0"
+    "@bjalon/object-vcs-core": "^0.1.1"
   },
   "devDependencies": {
     "vue": "^3.5.0"
